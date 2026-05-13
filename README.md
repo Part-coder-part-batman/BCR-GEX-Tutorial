@@ -58,7 +58,7 @@ Each part has a Prerequisites section listing exactly which input files are need
 
 ## Getting started
 
-1. Download data files from [Zenodo](https://doi.org/10.5281/zenodo.20134219)
+1. Download data files from [Zenodo](https://zenodo.org/records/20134219)
 2. Clone this repository
 3. Open `BCR_GEX_Tutorial_Part1.Rmd` in RStudio and update the paths chunk at the top
 4. Knit each part in order, or start from a later part using the Zenodo entry-point files
