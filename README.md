@@ -2,7 +2,7 @@
 
 A three-part R tutorial for single-cell BCR sequence processing and integration with gene expression data, using the Immcantation toolkit and Seurat.
 
-The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo: [10.5281/zenodo.20134219](https://doi.org/10.5281/zenodo.20134219)
+The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo: ([https://doi.org/10.5281/zenodo.20134219](https://zenodo.org/records/20134219))
 
 ---
 
