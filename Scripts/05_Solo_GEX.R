@@ -94,11 +94,11 @@ cluster_resolution <- 0.5
 # ---- IG/TCR variable gene exclusion patterns --------------------------------
 # These match V, D, and J gene transcripts for IG heavy, kappa, lambda, and
 # TCR alpha/beta chains. They are removed from the HVG list before PCA.
-# The ^IGHD pattern catches IGHD diversity genes (e.g. IGHD3-10) but NOT
+# The ^IGHD[0-9] pattern catches IGHD diversity genes (e.g. IGHD3-10) but NOT
 # the IgD isotype transcript (IGHD with no number suffix), which is kept.
 variable_gene_patterns <- c(
   "^IGHV", "^IGKV", "^IGKJ", "^IGLV", "^IGLJ",
-  "^IGHD", "^IGHJ",
+  "^IGHD[0-9]", "^IGHJ",
   "^TRAV", "^TRBV", "^TRAJ", "^TRBJ", "^TRBD"
 )
 variable_gene_regex <- paste(variable_gene_patterns, collapse = "|")
