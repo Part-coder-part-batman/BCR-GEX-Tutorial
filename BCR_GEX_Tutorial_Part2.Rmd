@@ -761,13 +761,13 @@ compute the embedding.
 ```{r gene-filter-setup}
 variable_gene_patterns <- c(
   "^IGHV", "^IGKV", "^IGKJ", "^IGLV", "^IGLJ",
-  "^IGHD", "^IGHJ",
+  "^IGHD[0-9]", "^IGHJ",
   "^TRAV", "^TRBV", "^TRAJ", "^TRBJ", "^TRBD"
 )
 variable_gene_regex <- paste(variable_gene_patterns, collapse = "|")
 ```
 
-One pattern worth clarifying: `^IGHD` catches the IGHD diversity genes
+One pattern worth clarifying: `^IGHD[0-9]` catches the IGHD diversity genes
 (e.g. IGHD3-10), not the IgD isotype transcript. The isotype transcript is
 named simply `IGHD` with no number suffix and is not matched by this regex. It
 remains in the HVG list if it is variable, which is correct -- IgD expression
