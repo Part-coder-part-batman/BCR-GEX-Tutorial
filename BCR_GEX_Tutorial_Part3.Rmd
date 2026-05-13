@@ -1,0 +1,1437 @@
+---
+title: "BCR + GEX Integration Tutorial — Part 3: Repertoire Visualization"
+subtitle: "Clonality donuts, phylogenetic trees, and shared clone analysis"
+author: "Nachi Nathan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = TRUE,
+  warning = FALSE
+)
+```
+
+---
+
+# Prerequisites
+
+Before running this part, the following must be in place.
+
+**Parts 1 and 2 must be complete**
+
+| File | Produced by | Location |
+|------|-------------|----------|
+| `P1_LN_bcr_data.tsv` | Part 1 | `P1_LN/Output/` |
+| `P1_PT_bcr_data.tsv` | Part 1 | `P1_PT/Output/` |
+| `integrated_S7_annotated.rds` | Part 2 | `RDS_Objects/` |
+| `BCR_viz_functions.R` | This tutorial | `ROOT_DIR/` |
+
+**IQ-TREE 2 (required for phylogenetic trees only)**
+
+The tree section uses the dowser package, which calls IQ-TREE 2 externally to
+build the tree topology. IQ-TREE 2 must be installed before running
+Section 8.4. The donut plot sections (8.1--8.3) and all of Step 9 do not
+require IQ-TREE and can be run independently.
+
+1. Download the IQ-TREE 2 binary for your operating system from:
+   https://github.com/Cibiv/IQ-TREE/releases
+   (look for the latest release and download the zip for your OS)
+
+2. Unzip and note the path to the executable:
+   - Windows: `C:/tools/iqtree2/bin/iqtree2.exe`
+   - macOS/Linux: `/usr/local/bin/iqtree2`
+
+3. Either add the bin folder to your system PATH so it can be called as
+   `iqtree2`, or supply the full path to the `exec` argument in
+   `build_bcr_trees()` as shown in Section 8.4.
+
+**R packages required**
+
+```r
+install.packages(c("dplyr", "ggplot2", "data.table", "writexl", "tibble",
+                   "tidyr", "patchwork", "scales", "stringr",
+                   "dowser", "ape", "RColorBrewer", "ggraph"))
+
+# Seurat v5
+install.packages("Seurat")
+
+# scRepertoire
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("scRepertoire")
+
+# ggtree is on Bioconductor — cannot be installed with install.packages()
+BiocManager::install("ggtree")
+```
+
+---
+
+# Overview
+
+This part covers BCR repertoire visualization using two tool ecosystems.
+Step 8 uses Immcantation and custom functions to visualize clonal structure
+within each sample -- donut plots at the whole-sample, per-isotype, and
+per-cluster level, followed by germline-rooted phylogenetic trees for the top
+expanded clones. Step 9 uses scRepertoire to ask a different question: are any
+clones shared between the LN and PT samples from the same patient?
+
+The dataset comes from Nathan et al., *Immunity* (2026). The two samples used
+throughout this tutorial -- P1_LN and P1_PT -- are the lymph node and primary
+tumor from the same ovarian cancer patient.
+
+---
+
+# Setup
+
+Set these variables before running anything else. All paths downstream are
+derived from these.
+
+```{r setup-session}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(ggplot2)
+  library(data.table)
+  library(writexl)
+  library(tibble)
+  library(tidyr)
+  library(patchwork)
+  library(scales)
+  library(stringr)
+  library(dowser)
+  library(ggtree)
+  library(ape)
+  library(RColorBrewer)
+  library(scRepertoire)
+  library(ggraph)
+})
+
+ROOT_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github"
+
+# BCR_viz_functions.R lives in ROOT_DIR alongside the tutorial Rmd files
+source(file.path(ROOT_DIR, "BCR_viz_functions.R"))
+
+# Input: integrated annotated Seurat object from Part 2
+rds_in <- file.path(ROOT_DIR, "RDS_Objects", "integrated_S7_annotated.rds")
+
+# Input: per-sample BCR TSV files from Part 1
+bcr_tsv <- list(
+  P1_LN = file.path(ROOT_DIR, "P1_LN", "Output", "P1_LN_bcr_data.tsv"),
+  P1_PT = file.path(ROOT_DIR, "P1_PT", "Output", "P1_PT_bcr_data.tsv")
+)
+
+# Output: annotated BCR files, summary tables, and plots
+out_dir  <- file.path(ROOT_DIR, "BCR_Data", "Annotated")
+plot_dir <- file.path(ROOT_DIR, "Plots", "Part3")
+rds_dir  <- file.path(ROOT_DIR, "RDS_Objects")
+dir.create(out_dir,  recursive = TRUE, showWarnings = FALSE)
+dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(rds_dir,  recursive = TRUE, showWarnings = FALSE)
+
+message("Ready.")
+```
+
+---
+
+# Step 8: BCR Visualization
+
+---
+
+## 8.1 Load the annotated Seurat object and extract cell type labels
+
+We load the integrated object from Part 2 and extract the
+barcode-to-cell-type mapping from its metadata. We only need three columns:
+the cell barcode, the `cell_type` label, and the `sample_id`. The barcodes in
+the integrated object carry the sample suffix (e.g. `ACGT...TGCA-1_P1_LN`)
+because this was appended during Part 2. The BCR `cell_id` column carries the
+same suffix from Part 1. The join in Step 8.2 therefore works directly without
+any barcode manipulation.
+
+Not all BCR cells will match a Seurat barcode. Cells that were filtered out
+during GEX QC (low quality, doublets) in Part 2 are present in the BCR data
+but absent from the Seurat object. These will have `cell_type = NA` and are
+retained in the BCR data for completeness. They appear in combined and
+per-isotype donuts -- their BCR sequences are valid -- but are excluded from
+per-cluster donuts and from tree tip labels, since they have no cluster
+assignment. In this dataset, 87.8% of P1_LN heavy chain cells and 78.1% of
+P1_PT heavy chain cells matched a Seurat barcode. Match rates vary depending
+on GEX QC stringency and are expected to be somewhat lower for the tumor
+sample, where more cells are filtered during QC.
+
+```{r load-seurat}
+if (!file.exists(rds_in)) {
+  stop("Cannot find integrated RDS at:\n  ", rds_in,
+       "\nRun Part 2 first.")
+}
+
+obj <- readRDS(rds_in)
+message("Integrated object loaded: ", ncol(obj), " cells | ",
+        length(unique(obj$cell_type)), " cell types")
+
+# Extract barcode -> cell_type table from Seurat metadata
+# rownames of @meta.data are the cell barcodes
+cell_type_map <- obj@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::select(cell_id, cell_type, sample_id)
+
+message("Cell type distribution:")
+print(table(cell_type_map$cell_type))
+```
+
+---
+
+## 8.2 Join cell type onto BCR data
+
+For each sample we load the BCR TSV from Part 1 and left-join the `cell_type`
+column by `cell_id`. The result is a long-format data frame with one row per
+contig (heavy and light chains in separate rows). This long format is required
+by all visualization functions and by dowser for tree building.
+
+We use `data.table::fread()` to load the TSV files. These files can be large
+and `fread` is substantially faster than `read_tsv` for files stored on
+OneDrive, which syncs in the background during reading and can cause `read_tsv`
+to hang for several minutes.
+
+```{r join-cell-type}
+bcr_annotated <- list()
+
+for (sid in names(bcr_tsv)) {
+
+  tsv_path <- bcr_tsv[[sid]]
+
+  if (!file.exists(tsv_path)) {
+    stop("Cannot find BCR TSV for ", sid, " at:\n  ", tsv_path,
+         "\nRun Part 1 first.")
+  }
+
+  message("\n--- Processing: ", sid, " ---")
+
+  # fread is used here rather than read_tsv for speed on OneDrive-backed paths
+  bcr <- data.table::fread(tsv_path, sep = "\t", data.table = FALSE)
+  message("  BCR contigs loaded: ", nrow(bcr))
+
+  # Filter cell_type_map to this sample and join by cell_id
+  ct_this_sample <- dplyr::filter(cell_type_map, sample_id == sid) %>%
+    dplyr::select(cell_id, cell_type)
+
+  bcr <- dplyr::left_join(bcr, ct_this_sample, by = "cell_id")
+
+  # Report match rate on heavy chains only (one per cell)
+  n_matched   <- sum(!is.na(bcr$cell_type[bcr$locus == "IGH"]))
+  n_igh_total <- sum(bcr$locus == "IGH")
+  pct_matched <- round(100 * n_matched / n_igh_total, 1)
+
+  message("  Cell type matched: ", n_matched, " / ", n_igh_total,
+          " heavy chain cells (", pct_matched, "%)")
+
+  # Match rates below 50% suggest a barcode format mismatch between
+  # Part 1 and Part 2. Check that sample suffixes are consistent.
+  if (pct_matched < 50) {
+    warning("  Less than 50% of heavy chain cells matched to a cell type. ",
+            "Check that barcode suffixes are consistent between Part 1 and Part 2.")
+  }
+
+  # Cells not in the Seurat object are left as NA -- they were filtered out
+  # during GEX QC and have no valid cluster assignment. They are retained in
+  # the BCR data because their BCR sequences are valid, but they will be
+  # excluded from per-cluster plots and tree tip labels automatically.
+
+  # Compute VDJ duplicate counts within each clone.
+  # For each chain, trim the sequence to V-start -> J-end (same coordinates
+  # used by the tree builder) and count how many cells in the same clone share
+  # an identical VDJ DNA sequence. This becomes Duplicate_DNA_H / _L in the
+  # wide-format table and tells you how many cells made the exact same antibody.
+  bcr <- bcr %>%
+    dplyr::mutate(
+      VDJ_DNA = dplyr::if_else(
+        !is.na(v_sequence_start) & !is.na(j_sequence_end) &
+          v_sequence_start > 0   & j_sequence_end > 0,
+        substr(sequence, v_sequence_start, j_sequence_end),
+        sequence
+      )
+    ) %>%
+    dplyr::group_by(clone_id, locus, VDJ_DNA) %>%
+    dplyr::mutate(
+      Duplicate_DNA_H = dplyr::if_else(locus == "IGH",             dplyr::n(), NA_integer_),
+      Duplicate_DNA_L = dplyr::if_else(locus %in% c("IGK", "IGL"), dplyr::n(), NA_integer_)
+    ) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(-VDJ_DNA)
+
+  bcr_annotated[[sid]] <- bcr
+  message("  Done: ", nrow(bcr), " total contigs | ",
+          length(unique(bcr$cell_id[bcr$locus == "IGH"])), " cells with heavy chain")
+}
+```
+
+---
+
+### 8.2a Save the annotated long-format BCR data
+
+We save the annotated BCR data for each sample as a TSV. This is the
+authoritative input for all BCR visualization downstream, and also feeds into
+Step 9. If you need to re-run any plots without re-loading the Seurat object,
+you can load these files directly and skip Steps 8.1--8.2.
+
+```{r save-long-format}
+for (sid in names(bcr_annotated)) {
+  out_path <- file.path(out_dir, paste0(sid, "_S8_bcr_annotated.tsv"))
+  data.table::fwrite(bcr_annotated[[sid]], file = out_path, sep = "\t")
+  message("Saved: ", out_path)
+}
+```
+
+---
+
+### 8.2b Build and save the wide-format summary table
+
+The long-format BCR data has two rows per cell (one for the heavy chain, one
+for the light chain). For inspection and tabular analysis it is useful to have
+a single-row-per-cell summary with both chains side by side. We build this here
+and save it as an Excel file.
+
+The table includes: cell barcode, clone ID, clone size, sample, cell type,
+isotype, light chain type (kappa/lambda), VDJ duplicate counts for heavy and
+light chains, somatic hypermutation counts and frequencies for both chains,
+V/D/J gene calls, and the full nucleotide sequences.
+
+```{r wide-format-table}
+for (sid in names(bcr_annotated)) {
+
+  bcr <- bcr_annotated[[sid]]
+
+  heavy <- bcr %>%
+    dplyr::filter(locus == "IGH") %>%
+    dplyr::transmute(
+      cell_id,
+      clone_id,
+      clone_count,
+      sample_id,
+      cell_type,
+      isotype        = c_call,
+      Duplicate_DNA_H,
+      mu_count_H     = mu_count,
+      mu_freq_H      = mu_freq,
+      v_call_H       = v_call,
+      d_call_H       = d_call,
+      j_call_H       = j_call,
+      sequence_H     = sequence
+    )
+
+  light <- bcr %>%
+    dplyr::filter(locus %in% c("IGK", "IGL")) %>%
+    dplyr::transmute(
+      cell_id,
+      light_chain = dplyr::case_when(
+        locus == "IGK" ~ "Kappa",
+        locus == "IGL" ~ "Lambda",
+        TRUE           ~ locus
+      ),
+      Duplicate_DNA_L,
+      mu_count_L = mu_count,
+      mu_freq_L  = mu_freq,
+      v_call_L   = v_call,
+      j_call_L   = j_call,
+      sequence_L = sequence
+    )
+
+  wide <- dplyr::left_join(heavy, light, by = "cell_id") %>%
+    dplyr::arrange(dplyr::desc(clone_count))
+
+  out_path <- file.path(out_dir, paste0(sid, "_S8_final_table.xlsx"))
+  writexl::write_xlsx(wide, out_path)
+  message(sid, ": wide-format table saved (", nrow(wide), " cells) -- ", out_path)
+}
+```
+
+---
+
+## 8.3 Donut plots
+
+Donut plots are one of the most intuitive ways to visualize clonal structure in
+BCR data. Each slice represents one clone, with arc length proportional to the
+number of cells in that clone. Singletons (clones with only one cell) are
+aggregated into a single white arc -- they correctly represent the proportion of
+the repertoire that is non-expanded, but individual singleton clones carry no
+meaningful information at this level of analysis.
+
+Expanded clones are colored by their dominant heavy chain isotype using the
+standard palette defined in `BCR_viz_functions.R`, giving an immediate visual
+read of the isotype composition of the expanded repertoire.
+
+Three levels of granularity are shown:
+
+- **Combined** -- one donut for the whole sample showing all clones. Each slice
+  represents one expanded clone colored by its heavy chain isotype; singletons
+  are aggregated into a single white arc. The relative size of the white arc
+  vs the colored arcs gives an immediate read of how clonal the repertoire is.
+- **Per isotype** -- one donut per isotype, showing clonal structure within
+  each isotype class. Each expanded clone gets a shade within that isotype's
+  color family; singletons are white.
+- **Per cluster** -- one donut per annotated cell type, showing the clonal
+  landscape within each population. BCR cells with no Seurat match (NA cell
+  type) are excluded here since they have no cluster assignment. In this
+  dataset, PC clusters show the highest clonality. Naive B cells show the
+  lowest clonality -- near-zero expansion is expected for this population. GC
+  clusters can also show substantial expansion. MBC subsets vary.
+
+---
+
+### 8.3.1 Combined donut -- P1_LN
+
+```{r donut-combined-ln, fig.height=6, fig.width=6}
+donuts_ln <- plot_combined_donut(bcr_annotated[["P1_LN"]], sample_name = "P1_LN")
+print(donuts_ln$all_clones)
+```
+
+---
+
+### 8.3.2 Combined donut -- P1_PT
+
+```{r donut-combined-pt, fig.height=6, fig.width=6}
+donuts_pt <- plot_combined_donut(bcr_annotated[["P1_PT"]], sample_name = "P1_PT")
+print(donuts_pt$all_clones)
+```
+
+---
+
+### 8.3.3 Per-isotype donuts -- P1_LN
+
+Each plot shows the clonal structure within one isotype. Expanded clones are
+shown in shades of the isotype's color family (shades of green for IGHG1,
+shades of blue for IGHM etc.), with darker shades indicating larger clones.
+Singletons are white. Isotypes with fewer than 5 cells are skipped.
+
+```{r donut-isotype-ln, fig.height=6, fig.width=6}
+iso_donuts_ln <- plot_isotype_donuts(bcr_annotated[["P1_LN"]], sample_name = "P1_LN")
+
+for (iso in names(iso_donuts_ln)) {
+  print(iso_donuts_ln[[iso]]$all_clones)
+}
+```
+
+---
+
+### 8.3.4 Per-isotype donuts -- P1_PT
+
+```{r donut-isotype-pt, fig.height=6, fig.width=6}
+iso_donuts_pt <- plot_isotype_donuts(bcr_annotated[["P1_PT"]], sample_name = "P1_PT")
+
+for (iso in names(iso_donuts_pt)) {
+  print(iso_donuts_pt[[iso]]$all_clones)
+}
+```
+
+---
+
+### 8.3.5 Per-cluster donuts -- P1_LN
+
+Clusters with fewer than 10 cells are skipped automatically. BCR cells that
+did not match a Seurat barcode (NA cell type) are excluded from this section.
+
+```{r donut-cluster-ln, fig.height=6, fig.width=6}
+cluster_donuts_ln <- plot_cluster_donuts(
+  bcr_annotated[["P1_LN"]],
+  sample_name   = "P1_LN",
+  cell_type_col = "cell_type"
+)
+
+for (cl in names(cluster_donuts_ln)) {
+  print(cluster_donuts_ln[[cl]]$all_clones)
+}
+```
+
+---
+
+### 8.3.6 Per-cluster donuts -- P1_PT
+
+```{r donut-cluster-pt, fig.height=6, fig.width=6}
+cluster_donuts_pt <- plot_cluster_donuts(
+  bcr_annotated[["P1_PT"]],
+  sample_name   = "P1_PT",
+  cell_type_col = "cell_type"
+)
+
+for (cl in names(cluster_donuts_pt)) {
+  print(cluster_donuts_pt[[cl]]$all_clones)
+}
+```
+
+---
+
+## 8.4 Phylogenetic trees
+
+Phylogenetic trees reconstruct the evolutionary history of a B cell clone --
+how cells diversified from a common unmutated ancestor through rounds of
+somatic hypermutation in the germinal center. Unlike generic phylogenetic tools,
+dowser builds trees specifically designed for B cell clonal evolution. The key
+difference is that the unmutated germline sequence (reconstructed in Part 1 by
+`createGermlines()`) is used as the known root of the tree. This means the root
+is not inferred from the data but is fixed to the true biological ancestor,
+giving the tree a meaningful directionality: branch length represents mutations
+accumulated from the germline, and the root-to-tip direction represents time
+and affinity maturation.
+
+Each tip represents one unique sequence (or a group of cells sharing an
+identical sequence, collapsed to reduce redundancy). Tip size reflects how many
+cells share that sequence. Tips are colored by isotype, showing how isotype
+switching occurred within the clone. Cell type labels are shown as colored
+rectangles next to tips where the cell type is known and at least two cells
+share that sequence -- singleton tips are shown as points only to avoid
+cluttering small trees.
+
+We build trees for the top 5 expanded clones per sample by default. You can
+change `top_n` or supply specific clone IDs via `clone_ids` to inspect
+particular clones of interest.
+
+---
+
+### 8.4a Cluster color palette
+
+The tree tip labels use the same cell type color palette as the UMAP in Part 2.
+
+```{r cluster-colors}
+cluster_colors <- c(
+  "MBC"          = "#F8766D",
+  "MBC_CR2pos"   = "#DB8E00",
+  "MBC_Atypical" = "#AEA200",
+  "MBC_NR4A"     = "#64B200",
+  "MBC_Cycling"  = "#00BD5C",
+  "Naive"        = "#00C1A7",
+  "GC"           = "#00A6FF",
+  "GC_Cycling"   = "#B385FF",
+  "PC"           = "#EF67EB",
+  "PC_2"         = "#FF63B6",
+  "Unsure"       = "#AAAAAA"
+)
+```
+
+---
+
+### 8.4.1 Trees -- P1_LN
+
+```{r trees-ln, fig.height=8, fig.width=10}
+# If IQ-TREE 2 is not on your system PATH, supply the full path:
+#   Windows : exec = "C:/tools/iqtree2/bin/iqtree2.exe"
+#   macOS   : exec = "/usr/local/bin/iqtree2"
+
+tree_plots_ln <- build_bcr_trees(
+  bcr_data       = bcr_annotated[["P1_LN"]],
+  cluster_colors = cluster_colors,
+  top_n          = 5,
+  cell_type_col  = "cell_type",
+  exec           = "iqtree2"
+)
+
+for (cid in names(tree_plots_ln)) {
+  if (!is.null(tree_plots_ln[[cid]])) {
+    print(tree_plots_ln[[cid]])
+  }
+}
+```
+
+---
+
+### 8.4.2 Trees -- P1_PT
+
+```{r trees-pt, fig.height=8, fig.width=10}
+tree_plots_pt <- build_bcr_trees(
+  bcr_data       = bcr_annotated[["P1_PT"]],
+  cluster_colors = cluster_colors,
+  top_n          = 5,
+  cell_type_col  = "cell_type",
+  exec           = "iqtree2"
+)
+
+for (cid in names(tree_plots_pt)) {
+  if (!is.null(tree_plots_pt[[cid]])) {
+    print(tree_plots_pt[[cid]])
+  }
+}
+```
+
+---
+
+### 8.4.3 Building a tree for a specific clone
+
+To build a tree for a particular clone of interest rather than the top N by
+size, supply the clone ID directly via the `clone_ids` argument. Clone IDs
+follow the format `<sample_id>_<random_code>_<clone_size>_<isotypes>` and can
+be found in the wide-format Excel table saved in Section 8.2b.
+
+```{r trees-specific, eval=FALSE}
+# Replace with your clone ID of interest
+target_clone <- "P1_LN_4aFs_6_G2G4"
+
+tree_specific <- build_bcr_trees(
+  bcr_data       = bcr_annotated[["P1_LN"]],
+  cluster_colors = cluster_colors,
+  clone_ids      = target_clone,
+  cell_type_col  = "cell_type",
+  exec           = "iqtree2"
+)
+
+print(tree_specific[[target_clone]])
+```
+
+---
+
+### 8.4.4 Save tree plots to PDF
+
+```{r save-trees}
+tree_dir <- file.path(plot_dir, "Trees")
+dir.create(tree_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (sid in c("P1_LN", "P1_PT")) {
+  plots <- if (sid == "P1_LN") tree_plots_ln else tree_plots_pt
+
+  for (cid in names(plots)) {
+    if (!is.null(plots[[cid]])) {
+      out_file <- file.path(tree_dir, paste0(sid, "_", cid, "_tree.pdf"))
+      ggplot2::ggsave(out_file, plots[[cid]], width = 10, height = 8)
+      message("Saved: ", out_file)
+    }
+  }
+}
+
+message("All tree plots saved.")
+```
+
+---
+
+# Step 9: Cross-Sample Clonal Analysis with scRepertoire
+
+The analyses in Step 8 are per-sample: clones were defined independently for
+each sample in Part 1, so a clone in P1_LN and a clone in P1_PT with identical
+V(D)J sequences are treated as separate lineages. Step 9 asks a different
+question: are any clones shared between the LN and PT samples from the same
+patient? To answer this we use scRepertoire, which applies a cross-sample
+clonotype definition (CTstrict) based on shared V gene usage and greater than
+85% CDR3 nucleotide similarity. This is intentionally distinct from the
+Immcantation clone IDs used in Step 8. The two definitions serve different
+purposes and should not be mixed.
+
+**A note on clonotype definitions:** scRepertoire's CTstrict and Immcantation's
+`hierarchicalClones()` are not equivalent. Immcantation uses a mixture-model
+distance threshold on full heavy-chain sequences with light-chain splitting;
+scRepertoire uses a fixed 85% CDR3 similarity cutoff. CTstrict is specifically
+designed for cross-sample comparison where you do not want to re-run Immcantation
+on the combined data. Do not replace the Immcantation clone IDs with CTstrict
+for within-sample analyses -- they serve different purposes.
+
+---
+
+## 9.1 Prepare AIRR data for scRepertoire
+
+scRepertoire's `combineBCR()` expects a named list of data frames, one per
+sample, with specific column names. Our Immcantation AIRR data uses slightly
+different names (e.g. `cell_id` instead of `barcode`, `locus` instead of
+`chain`, `v_call` instead of `v_gene`). The function below maps between them.
+
+Note that `cdr3` (amino acid) and `cdr3_nt` (nucleotide) are both mapped from
+the `junction` and `junction_aa` columns. scRepertoire uses `cdr3_nt` for the
+CTstrict distance calculation.
+
+```{r prepare-screp}
+prepare_for_scRepertoire <- function(df) {
+
+  # barcode and sample identity
+  if (!"barcode"   %in% names(df) && "cell_id"   %in% names(df)) df$barcode   <- df$cell_id
+  if (!"sample"    %in% names(df) && "sample_id" %in% names(df)) df$sample    <- df$sample_id
+
+  # chain locus
+  if (!"chain"     %in% names(df) && "locus"     %in% names(df)) df$chain     <- df$locus
+
+  # gene calls
+  if (!"v_gene"    %in% names(df) && "v_call"    %in% names(df)) df$v_gene    <- df$v_call
+  if (!"d_gene"    %in% names(df) && "d_call"    %in% names(df)) df$d_gene    <- df$d_call
+  if (!"j_gene"    %in% names(df) && "j_call"    %in% names(df)) df$j_gene    <- df$j_call
+  if (!"c_gene"    %in% names(df) && "c_call"    %in% names(df)) df$c_gene    <- df$c_call
+
+  # CDR3 sequences -- scRepertoire uses cdr3 (aa) and cdr3_nt for CTstrict
+  if (!"cdr3"      %in% names(df) && "junction_aa" %in% names(df)) df$cdr3    <- df$junction_aa
+  if (!"cdr3_nt"   %in% names(df) && "junction"    %in% names(df)) df$cdr3_nt <- df$junction
+  if (!"cdr3_aa"   %in% names(df) && "junction_aa" %in% names(df)) df$cdr3_aa <- df$junction_aa
+
+  # UMI count as a reads proxy (optional but avoids NAs in scRepertoire internals)
+  if (!"reads"     %in% names(df) && "umi_count"   %in% names(df)) df$reads   <- df$umi_count
+  if (!"reads"     %in% names(df))                                  df$reads   <- 1L
+
+  return(df)
+}
+```
+
+Now load both samples, apply the mapping, and run `combineBCR()`.
+`removeMulti = TRUE` drops cells with more than one heavy chain (these were
+already filtered in Part 1, so this is a safety net only).
+
+```{r combine-bcr}
+# Load the annotated BCR TSVs saved in Section 8.2a
+annotated_tsv <- list(
+  P1_LN = file.path(out_dir, "P1_LN_S8_bcr_annotated.tsv"),
+  P1_PT = file.path(out_dir, "P1_PT_S8_bcr_annotated.tsv")
+)
+
+airr_list <- lapply(annotated_tsv, function(path) {
+  if (!file.exists(path)) stop("File not found: ", path)
+  data.table::fread(path, sep = "\t", data.table = FALSE)
+})
+
+airr_list <- lapply(airr_list, prepare_for_scRepertoire)
+
+# Quick check: confirm required columns are present
+required_cols <- c("barcode", "chain", "v_gene", "j_gene", "cdr3_nt")
+for (sid in names(airr_list)) {
+  missing <- setdiff(required_cols, colnames(airr_list[[sid]]))
+  if (length(missing) > 0)
+    stop(sid, ": missing required columns after mapping: ",
+         paste(missing, collapse = ", "))
+}
+
+message("Running combineBCR() across ", length(airr_list), " samples...")
+
+# Note on barcode format: combineBCR() prepends the sample name to each
+# barcode, producing e.g. "P1_LN_ACTGCTCA...-1_P1_LN". This double
+# suffix/prefix is expected -- our cell_ids already carry the sample suffix
+# from Part 1, and combineBCR() adds its own prefix on top. The ct_lookup
+# step in 9.3.1 strips the leading prefix to recover the original cell_id
+# format used throughout Parts 1-8.
+
+combined_BCR <- combineBCR(
+  airr_list,
+  samples     = names(airr_list),
+  removeNA    = FALSE,
+  removeMulti = TRUE
+)
+
+# Confirm output
+message("combineBCR() complete.")
+message("Cells per sample:")
+print(sapply(combined_BCR, nrow))
+message("Columns in combined_BCR output:")
+print(colnames(combined_BCR[[1]]))
+message("Example CTstrict values (P1_LN):")
+print(head(combined_BCR[["P1_LN"]]$CTstrict, 10))
+
+# Save
+saveRDS(combined_BCR, file.path(rds_dir, "combined_BCR_S9.rds"))
+message("Saved: combined_BCR_S9.rds")
+```
+
+---
+
+## 9.2 Repertoire-level characterization
+
+Before looking at shared clones, we characterize each sample's repertoire
+structure independently.
+
+---
+
+### 9.2.1 Clonal homeostasis
+
+`clonalHomeostasis()` shows what fraction of each sample's repertoire is
+occupied by clones in different size classes. Each bar represents one sample;
+the stacked segments represent the proportion of cells belonging to rare,
+small, medium, large, and hyperexpanded clones. This gives an immediate read
+of how oligoclonal each repertoire is.
+
+For B cell data the default proportional bins (Rare < 0.0001, Small < 0.001,
+Medium < 0.01, Large < 0.1, Hyperexpanded < 1) are appropriate.
+
+In this patient, PT shows substantially more clonal expansion than LN, with a
+notable fraction of cells in the Medium and Large categories. LN is almost
+entirely composed of Small and Rare clones.
+
+```{r homeostasis, fig.height=5, fig.width=6}
+p_homeostasis <- clonalHomeostasis(
+  combined_BCR,
+  cloneCall = "strict"
+)
+
+p_homeostasis
+
+ggsave(file.path(plot_dir, "clonal_homeostasis.pdf"),
+       p_homeostasis, width = 6, height = 5)
+message("Saved: clonal_homeostasis.pdf")
+```
+
+---
+
+## 9.3 Quantify shared clones
+
+Here we break down the repertoire overlap into specific numbers: how many
+CTstrict clones are shared between LN and PT, and how many cells belong to
+those shared clones. We also build a master table that joins CTstrict onto the
+per-cell BCR data from Step 8.
+
+**A note on method and reproducibility:** This tutorial uses pure CTstrict for
+both identifying shared clones and counting cells within them. If you compare
+these numbers against a paper that used a hybrid approach -- using CTstrict to
+identify shared clones but Immcantation `clone_id` to count cells -- you will
+get different totals. Immcantation groups cells more aggressively than CTstrict,
+so the hybrid approach typically counts more cells per shared clone. Neither is
+wrong; they answer slightly different questions. The pure CTstrict approach used
+here is more reproducible because it depends only on scRepertoire.
+
+---
+
+### 9.3.1 Build the CTstrict lookup
+
+`combineBCR()` prepends the sample name to each barcode (e.g.
+`P1_LN_ACGT...-1_P1_LN`). The BCR data from Step 8 uses `cell_id` in the
+format `ACGT...-1_P1_LN`. We strip the leading `<sample>_` prefix from the
+combined_BCR barcodes so they match the Step 8 cell_id format.
+
+```{r ct-lookup}
+ct_lookup <- do.call(rbind, lapply(names(combined_BCR), function(sid) {
+  df <- combined_BCR[[sid]]
+  data.frame(
+    sample_id = df$sample,
+    # Remove the leading "<sample>_" prefix that combineBCR adds
+    cell_id   = sub(paste0("^", sid, "_"), "", df$barcode),
+    CTstrict  = df$CTstrict,
+    CTaa      = df$CTaa,
+    CTnt      = df$CTnt,
+    CTgene    = df$CTgene,
+    stringsAsFactors = FALSE
+  )
+}))
+
+message("CTstrict lookup: ", nrow(ct_lookup), " rows")
+message("Example cell_id values after stripping:")
+print(head(ct_lookup$cell_id, 6))
+```
+
+---
+
+### 9.3.2 Join CTstrict onto the master BCR table
+
+Load both annotated BCR TSVs from Step 8, combine them, and join the CTstrict
+column. This master table is the single input for the shared clone dot plot
+in Step 9.6.
+
+```{r master-table}
+bcr_all <- do.call(rbind, lapply(names(annotated_tsv), function(sid) {
+  data.table::fread(annotated_tsv[[sid]], sep = "\t", data.table = FALSE)
+}))
+
+message("Master BCR table: ", nrow(bcr_all), " rows | ",
+        length(unique(bcr_all$cell_id[bcr_all$locus == "IGH"])),
+        " cells with heavy chain")
+
+# Left-join CTstrict by sample_id + cell_id
+bcr_all <- dplyr::left_join(
+  bcr_all,
+  ct_lookup,
+  by = c("sample_id", "cell_id")
+)
+
+# Check match rate
+n_igh     <- sum(bcr_all$locus == "IGH")
+n_matched <- sum(!is.na(bcr_all$CTstrict[bcr_all$locus == "IGH"]))
+message("CTstrict matched: ", n_matched, " / ", n_igh,
+        " heavy chain cells (",
+        round(100 * n_matched / n_igh, 1), "%)")
+
+# If the match rate is below 50%, check that the barcode format is consistent
+# between Part 1 and Part 2. The cell_id in Step 8 should look like
+# "ACGT...-1_P1_LN" and the stripped combined_BCR barcode should match exactly.
+if (n_matched / n_igh < 0.5) {
+  warning("Less than 50% of heavy chain cells matched a CTstrict. ",
+          "Check barcode format consistency between Part 1 and Part 2.")
+}
+
+# Save
+data.table::fwrite(bcr_all,
+                   file.path(out_dir, "All_S9_bcr_with_CTstrict.tsv"),
+                   sep = "\t")
+message("Saved: All_S9_bcr_with_CTstrict.tsv")
+```
+
+---
+
+### 9.3.3 Count shared clones and cells
+
+```{r shared-counts}
+# Tissue label (LN or PT) derived from sample_id
+bcr_all <- bcr_all %>%
+  dplyr::mutate(
+    tissue = dplyr::case_when(
+      grepl("_LN$|^LN", sample_id) ~ "LN",
+      grepl("_PT$|^PT", sample_id) ~ "PT",
+      TRUE ~ "UNK"
+    )
+  )
+
+# Restrict to heavy chain rows with a valid CTstrict
+bcr_igh <- bcr_all %>%
+  dplyr::filter(locus == "IGH", !is.na(CTstrict), CTstrict != "")
+
+# Which CTstrict clones appear in both LN and PT?
+clones_ln <- unique(bcr_igh$CTstrict[bcr_igh$tissue == "LN"])
+clones_pt <- unique(bcr_igh$CTstrict[bcr_igh$tissue == "PT"])
+shared_cts <- intersect(clones_ln, clones_pt)
+
+message("CTstrict clones in LN only:   ", length(setdiff(clones_ln, clones_pt)))
+message("CTstrict clones in PT only:   ", length(setdiff(clones_pt, clones_ln)))
+message("CTstrict clones shared LN+PT: ", length(shared_cts))
+
+# Cells per tissue belonging to shared clones
+# (raw counts only -- no percentages; denominator choice is non-trivial)
+cells_ln_shared <- sum(bcr_igh$CTstrict[bcr_igh$tissue == "LN"] %in% shared_cts)
+cells_pt_shared <- sum(bcr_igh$CTstrict[bcr_igh$tissue == "PT"] %in% shared_cts)
+
+message("LN cells in shared clones:    ", cells_ln_shared)
+message("PT cells in shared clones:    ", cells_pt_shared)
+message("Total shared cells:           ", cells_ln_shared + cells_pt_shared)
+
+# Summary table of shared clones with cell counts per tissue
+shared_clone_tbl <- bcr_igh %>%
+  dplyr::filter(CTstrict %in% shared_cts) %>%
+  dplyr::count(CTstrict, tissue, name = "n_cells") %>%
+  tidyr::pivot_wider(
+    names_from  = tissue,
+    values_from = n_cells,
+    values_fill = 0L
+  ) %>%
+  dplyr::mutate(total_cells = LN + PT) %>%
+  dplyr::arrange(dplyr::desc(total_cells))
+
+message("\nShared clone table (top 10):")
+print(knitr::kable(head(shared_clone_tbl, 10), caption = "Top 10 shared clones by total cell count"))
+```
+
+---
+
+### 9.3.4 Visualize shared vs. exclusive cell counts
+
+With only two samples, summary statistics like the Morisita overlap index
+reduce to a single number and are not informative as a standalone plot.
+Instead, we show a stacked bar chart of cell counts broken down by tissue
+and sharing status: how many IGH cells in each sample belong to
+tissue-exclusive clones vs. clones shared with the other tissue.
+
+```{r shared-bar, fig.height=4, fig.width=5}
+shared_bar_df <- bcr_igh %>%
+  dplyr::mutate(
+    status = dplyr::if_else(CTstrict %in% shared_cts, "Shared", "Exclusive")
+  ) %>%
+  dplyr::count(tissue, status, name = "n_cells") %>%
+  dplyr::mutate(
+    tissue = factor(tissue, levels = c("LN", "PT")),
+    status = factor(status, levels = c("Shared", "Exclusive"))
+  )
+
+p_shared_bar <- ggplot(shared_bar_df,
+                       aes(x = tissue, y = n_cells, fill = status)) +
+  geom_col(width = 0.55) +
+  geom_text(aes(label = n_cells),
+            position = position_stack(vjust = 0.5),
+            color = "white", size = 4, fontface = "bold") +
+  scale_fill_manual(
+    values = c(Shared = "#2166AC", Exclusive = "#B2B2B2"),
+    name   = "Clone status"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.x = element_blank()) +
+  labs(
+    x     = "Tissue",
+    y     = "Number of cells (IGH)",
+    title = "Cells in shared vs. exclusive clones -- P1"
+  )
+
+p_shared_bar
+
+ggsave(file.path(plot_dir, "shared_cells_bar_P1.pdf"),
+       p_shared_bar, width = 5, height = 4)
+message("Saved: shared_cells_bar_P1.pdf")
+```
+
+---
+
+## 9.4 Attach clonal data to the Seurat object
+
+`combineExpression()` adds the scRepertoire clonotype metadata to the Seurat
+object's `@meta.data` slot. After this step, every cell in the UMAP has a
+CTstrict label, a cloneSize category, and a clonal frequency, enabling
+visualization of clonal structure directly on the dimensional reduction.
+
+The barcode format in the Seurat object is `ACGT...-1_P1_LN` (barcode + sample
+suffix, added during integration in Part 2). The format in combined_BCR after
+`combineBCR()` is `P1_LN_ACGT...-1_P1_LN` (sample prefix + barcode + original
+suffix). We harmonize these before calling `combineExpression()` by stripping
+the leading `<sample>_` prefix from combined_BCR barcodes.
+
+```{r attach-seurat}
+seu <- readRDS(rds_in)
+message("Seurat object loaded: ", ncol(seu), " cells")
+
+# Harmonize barcodes: strip leading "<sample>_" prefix from combined_BCR
+combined_BCR_harmonized <- lapply(combined_BCR, function(df) {
+  df$barcode <- sub(paste0("^", df$sample, "_"), "", df$barcode)
+  df
+})
+
+# Overlap check before proceeding
+airr_barcodes <- unique(unlist(lapply(combined_BCR_harmonized,
+                                       function(x) x$barcode)))
+n_overlap <- sum(colnames(seu) %in% airr_barcodes)
+message("Barcode overlap (Seurat intersect AIRR): ", n_overlap, " / ", ncol(seu))
+
+if (n_overlap == 0) {
+  stop(
+    "Zero overlap after barcode harmonization.\n",
+    "Check that cell_id format in Step 8 TSVs matches Seurat colnames.\n",
+    "Example Seurat names: ", paste(head(colnames(seu), 3), collapse = ", "), "\n",
+    "Example AIRR barcodes: ", paste(head(airr_barcodes, 3), collapse = ", ")
+  )
+}
+
+# Add a 'sample' column to Seurat metadata for combineExpression grouping.
+# Seurat cell names look like "ACGT...-1_P1_LN". We need the sample label to
+# match the names of combined_BCR_harmonized (e.g. "P1_LN", "P1_PT").
+# We extract the suffix after the last "-1_" by matching known sample IDs.
+sample_ids <- names(combined_BCR_harmonized)
+seu$sample <- NA_character_
+for (sid in sample_ids) {
+  seu$sample[grepl(paste0("_", sid, "$"), colnames(seu))] <- sid
+}
+message("Seurat sample labels:")
+print(table(seu$sample, useNA = "ifany"))
+
+# Run combineExpression
+# proportion = TRUE is required so Frequency is stored as a proportion.
+# The cloneType bins (Rare/Small/Medium/Large/Hyperexpanded) use proportion
+# thresholds (0.0001 / 0.001 / 0.01 / 0.1 / 1). With proportion = FALSE,
+# raw counts are stored and every clone exceeds the 0.1 threshold, collapsing
+# all cells into "Hyperexpanded".
+# group.by is intentionally omitted: in scRepertoire v2, combining group.by
+# with proportion = TRUE causes frequencies to be calculated incorrectly,
+# also resulting in all cells landing in "Hyperexpanded".
+seu_scRep <- combineExpression(
+  combined_BCR_harmonized,
+  sc         = seu,
+  cloneCall  = "strict",
+  proportion = TRUE,
+  filterNA   = FALSE
+)
+
+message("combineExpression() complete.")
+message("New metadata columns added:")
+new_cols <- setdiff(colnames(seu_scRep@meta.data), colnames(seu@meta.data))
+print(new_cols)
+
+# Confirm CTstrict is present
+if (!"CTstrict" %in% colnames(seu_scRep@meta.data)) {
+  warning("CTstrict column not found in Seurat metadata. ",
+          "Check that cloneCall = 'strict' matches the combined_BCR columns.")
+} else {
+  n_with_ct <- sum(!is.na(seu_scRep$CTstrict))
+  message("Cells with CTstrict assigned: ", n_with_ct, " / ", ncol(seu_scRep))
+}
+
+# Save
+saveRDS(seu_scRep, file.path(rds_dir, "integrated_S9_scRep.rds"))
+message("Saved: integrated_S9_scRep.rds")
+```
+
+---
+
+## 9.5 Single-cell visualizations
+
+---
+
+### 9.5.1 Clonal network on UMAP
+
+`clonalNetwork()` draws arrows between clusters that share CTstrict clones,
+with arrow thickness proportional to the number of cells involved. The overall
+UMAP layout is preserved so you can see which cell types are clonally connected.
+
+We first plot all connections across the whole object, then filter to a single
+cluster of interest using `filter.identity`. This is useful for asking which
+other clusters share clones with, say, the GC or plasma cell population.
+
+```{r clonal-network-all, fig.height=7, fig.width=9}
+# Full network -- all clusters
+p_net_all <- clonalNetwork(
+  seu_scRep,
+  reduction       = "umap",
+  identity        = "cell_type",
+  filter.clones   = NULL,
+  filter.identity = NULL,
+  cloneCall       = "strict"
+)
+
+p_net_all
+
+ggsave(file.path(plot_dir, "clonal_network_all.pdf"),
+       p_net_all, width = 9, height = 7)
+message("Saved: clonal_network_all.pdf")
+```
+
+Now filter to a single cluster of interest. Replace `"PC"` below with
+whichever cell type you want to examine. The plot will show only the
+connections involving that cluster.
+
+```{r clonal-network-filtered, fig.height=7, fig.width=9}
+# Replace "PC" with your cluster of interest
+cluster_of_interest <- "PC"
+
+p_net_filtered <- clonalNetwork(
+  seu_scRep,
+  reduction       = "umap",
+  identity        = "cell_type",
+  filter.identity = cluster_of_interest,
+  filter.clones   = NULL,
+  cloneCall       = "strict"
+)
+
+p_net_filtered
+
+ggsave(file.path(plot_dir,
+                 paste0("clonal_network_", cluster_of_interest, ".pdf")),
+       p_net_filtered, width = 9, height = 7)
+message("Saved: clonal_network_", cluster_of_interest, ".pdf")
+```
+
+---
+
+### 9.5.2 Clonal occupancy by cluster
+
+`occupiedscRepertoire()` shows how many cells in each cluster belong to each
+cloneSize category (Single, Small, Medium, Large, Hyperexpanded), as defined
+by `combineExpression()`. This is a useful complement to the donut plots in
+Step 8: instead of showing clone identity, it shows the expansion profile of
+each annotated cell type.
+
+Note: `clonalOccupy()` was renamed to `occupiedscRepertoire()` in scRepertoire
+v2.0. If you get a "could not find function" error for one, use the other.
+
+```{r clonal-occupy, fig.height=5, fig.width=9}
+# Set cell_type factor levels to control x-axis order
+cluster_order <- c(
+  "Naive", "MBC", "MBC_CR2pos", "MBC_NR4A", "MBC_Atypical",
+  "MBC_Cycling", "GC", "GC_Cycling", "PC", "PC_2", "Unsure"
+)
+
+seu_scRep$cell_type <- factor(seu_scRep$cell_type, levels = cluster_order)
+
+p_occupy <- occupiedscRepertoire(
+  seu_scRep,
+  x.axis     = "cell_type",
+  proportion = FALSE,
+  label      = TRUE
+)
+
+p_occupy +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave(file.path(plot_dir, "clonal_occupy_counts.pdf"),
+       p_occupy + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+       width = 9, height = 5)
+
+# Proportion version -- useful when cluster sizes differ greatly
+p_occupy_prop <- occupiedscRepertoire(
+  seu_scRep,
+  x.axis     = "cell_type",
+  proportion = TRUE,
+  label      = FALSE
+)
+
+p_occupy_prop +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave(file.path(plot_dir, "clonal_occupy_proportion.pdf"),
+       p_occupy_prop + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+       width = 9, height = 5)
+
+message("Saved: clonal_occupy_counts.pdf and clonal_occupy_proportion.pdf")
+```
+
+---
+
+## 9.6 Shared clone dot plot
+
+This plot shows which cell type clusters each shared LN/PT clone occupies.
+Each row is one shared CTstrict clone, ordered by total cell count (largest
+at top). Each column is a cell type cluster. Each dot encodes three things:
+
+- **Color** -- dominant heavy chain isotype for that clone x cluster combination
+- **Shape** -- tissue of origin: circle = LN only, square = PT only,
+  triangle = cells from both LN and PT found in that cluster
+- **Size** -- number of cells in that clone x cluster combination
+
+Only clones with at least one cell in both LN and PT (after restricting to
+cells with a valid `cell_type` annotation) are shown.
+
+---
+
+### 9.6a Color palette and helper functions
+
+```{r shared-plot-setup}
+# Isotype colors -- consistent with the donut palette in Step 8
+isotype_colors <- c(
+  IGHD  = "#E41A1C",
+  IGHM  = "#377EB8",
+  IGHG1 = "#4DAF4A",
+  IGHG2 = "#984EA3",
+  IGHG3 = "#FF7F00",
+  IGHG4 = "#FFFF33",
+  IGHA1 = "#A65628",
+  IGHA2 = "#F781BF"
+)
+
+isotype_priority <- c("IGHG1", "IGHG2", "IGHG3", "IGHG4",
+                      "IGHA1", "IGHA2", "IGHD",  "IGHM")
+
+# For each clone x cluster, pick the most common isotype.
+# Ties are broken by the priority order above (IgG first, then IgA, IgD, IgM).
+pick_dominant_isotype <- function(x) {
+  x <- x[!is.na(x) & x != "IGHE"]
+  if (length(x) == 0) return(NA_character_)
+  tab  <- table(x)
+  mx   <- max(tab)
+  tied <- names(tab)[tab == mx]
+  if (length(tied) == 1) return(tied)
+  tied <- intersect(isotype_priority, tied)
+  if (length(tied) > 0) return(tied[1])
+  sort(names(tab)[tab == mx])[1]
+}
+```
+
+---
+
+### 9.6b Build the plot data
+
+```{r shared-plot-data}
+# Use only heavy chain rows that have a valid CTstrict, cell_type, and isotype
+bcr_plot <- bcr_all %>%
+  dplyr::filter(
+    locus     == "IGH",
+    !is.na(CTstrict),  CTstrict  != "",
+    !is.na(cell_type), cell_type != "",
+    !is.na(c_call),    c_call    != "",
+    c_call    != "IGHE"
+  ) %>%
+  dplyr::mutate(
+    tissue = dplyr::case_when(
+      sample_id == "P1_LN" ~ "LN",
+      sample_id == "P1_PT" ~ "PT",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  dplyr::filter(!is.na(tissue))
+
+# Identify clones present in both LN and PT
+shared_cts_p1 <- bcr_plot %>%
+  dplyr::group_by(CTstrict) %>%
+  dplyr::summarise(
+    has_LN = any(tissue == "LN"),
+    has_PT = any(tissue == "PT"),
+    .groups = "drop"
+  ) %>%
+  dplyr::filter(has_LN & has_PT) %>%
+  dplyr::pull(CTstrict)
+
+message("Shared CTstrict clones with cell type annotation: ",
+        length(shared_cts_p1))
+
+# Collapse to one row per (CTstrict x cell_type)
+plot_df <- bcr_plot %>%
+  dplyr::filter(CTstrict %in% shared_cts_p1) %>%
+  dplyr::group_by(CTstrict, cell_type) %>%
+  dplyr::summarise(
+    Count       = dplyr::n(),
+    has_LN_here = any(tissue == "LN"),
+    has_PT_here = any(tissue == "PT"),
+    ccall_dom   = pick_dominant_isotype(c_call),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    Shape = dplyr::case_when(
+      has_LN_here & has_PT_here ~ "Both",
+      has_PT_here               ~ "PT",
+      has_LN_here               ~ "LN"
+    ),
+    ccall_dom  = factor(ccall_dom, levels = isotype_priority),
+    cell_type  = factor(cell_type, levels = cluster_order),
+    Count_plot = pmin(pmax(Count, 1L), max(Count))
+  ) %>%
+  dplyr::filter(!is.na(Shape), !is.na(ccall_dom))
+
+# Order clones by total cell count -- largest clone at the top of the y axis
+clone_order_tbl <- plot_df %>%
+  dplyr::group_by(CTstrict) %>%
+  dplyr::summarise(total_cells = sum(Count), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(total_cells))
+
+plot_df <- plot_df %>%
+  dplyr::mutate(CloneID = factor(CTstrict, levels = clone_order_tbl$CTstrict))
+
+message("Plot data: ", dplyr::n_distinct(plot_df$CTstrict),
+        " clones x ", dplyr::n_distinct(plot_df$cell_type), " clusters")
+```
+
+---
+
+### 9.6c Build and save the plot
+
+```{r shared-plot-build, fig.height=8, fig.width=10}
+# Horizontal dotted guide lines -- one per clone row
+y_lines <- seq_along(levels(plot_df$CloneID))
+
+# Dynamic size scale: upper limit is the actual max cell count in the data
+max_count <- max(plot_df$Count)
+mid_count <- round(max_count / 2)
+
+p_shared <- ggplot(plot_df,
+                   aes(x     = cell_type,
+                       y     = CloneID,
+                       color = ccall_dom,
+                       shape = Shape,
+                       size  = Count_plot)) +
+    geom_hline(yintercept = y_lines,
+               linetype = "dotted", color = "grey70", linewidth = 0.4) +
+    geom_point(stroke = 0.8) +
+    scale_x_discrete(limits = cluster_order, drop = FALSE) +
+    scale_color_manual(values = isotype_colors, name = "Isotype") +
+    scale_shape_manual(
+      values = c(PT = 15, LN = 16, Both = 17),
+      breaks = c("PT", "LN", "Both"),
+      labels = c(PT = "PT", LN = "LN", Both = "LN+PT"),
+      name   = "Origin"
+    ) +
+    scale_size_continuous(
+      limits = c(1, max_count),
+      range  = c(3, 8),
+      breaks = c(1, mid_count, max_count),
+      labels = c("1", as.character(mid_count), as.character(max_count)),
+      name   = "Cells / clone / cluster"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position    = "bottom",
+      axis.text.x        = element_text(angle = 45, hjust = 1, size = 11),
+      axis.text.y        = element_blank(),
+      axis.ticks.y       = element_blank(),
+      panel.grid.major.y = element_blank()
+    ) +
+    labs(
+      x     = "Cell type cluster",
+      y     = NULL,
+      title = "Shared LN/PT clones -- P1"
+    ) +
+    guides(
+      color = guide_legend(override.aes = list(size = 4)),
+      shape = guide_legend(override.aes = list(size = 4)),
+      size  = guide_legend(override.aes = list(shape = 16))
+    )
+
+p_shared
+
+ggsave(file.path(plot_dir, "shared_clones_dotplot_P1.pdf"),
+       p_shared, width = 10, height = 8)
+message("Saved: shared_clones_dotplot_P1.pdf")
+```
+
+---
+
+# Going further -- other scRepertoire analyses
+
+Part 3 covers the analyses performed in the accompanying paper. scRepertoire
+offers several additional analyses that may be useful depending on your dataset.
+These are not run here -- with two samples many are underpowered -- but are
+straightforward to add.
+
+**Clonal diversity** -- compare Shannon entropy, inverse Simpson, Gini
+coefficient, and other indices across samples. Most informative when comparing
+many samples or conditions:
+
+```r
+clonalDiversity(combined_BCR, cloneCall = "strict", metric = "shannon")
+clonalDiversity(combined_BCR, cloneCall = "strict", metric = "inv.simpson")
+```
+
+**V gene usage** -- visualize heavy chain V gene usage as a bar chart or
+heatmap, or compare V-J pairings. Useful for identifying biased gene usage in
+expanded clones:
+
+```r
+vizGenes(combined_BCR, x.axis = "IGHV", plot = "barplot",
+         summary.fun = "proportion")
+percentVJ(combined_BCR, chain = "IGH", summary.fun = "percent")
+```
+
+**Clonal proportion** -- rank-based view of how much repertoire space is
+occupied by the top 10, top 100, top 1000 clones:
+
+```r
+clonalProportion(combined_BCR, cloneCall = "strict")
+```
+
+**Highlight specific clones on UMAP** -- pin a clone of interest and see
+where its cells sit across the transcriptomic landscape:
+
+```r
+seu_scRep <- highlightClones(seu_scRep, cloneCall = "strict",
+                              sequence = c("your_CTstrict_id"))
+DimPlot(seu_scRep, group.by = "highlight")
+```
+
+**Alluvial plot** -- trace how clones flow across multiple categorical
+variables (e.g. tissue, cell type, patient). Requires at least three
+well-populated categories to be interpretable:
+
+```r
+alluvialClones(seu_scRep, clone.call = "strict",
+               y.axes = c("sample", "cell_type"))
+```
+
+**Chord diagram** -- visualize the number of shared clones between clusters as
+a circular diagram:
+
+```r
+library(circlize)
+vizCirclize(seu_scRep, group.by = "cell_type")
+```
+
+For complete documentation and examples see the scRepertoire vignettes at
+https://www.borch.dev/uploads/screpertoire/.
+
+---
+
+# Summary
+
+| Output file | Contents |
+|-------------|----------|
+| `P1_LN_S8_bcr_annotated.tsv` | Long-format BCR data with cell_type joined, P1_LN |
+| `P1_PT_S8_bcr_annotated.tsv` | Long-format BCR data with cell_type joined, P1_PT |
+| `P1_LN_S8_final_table.xlsx` | Wide-format one-row-per-cell summary, P1_LN |
+| `P1_PT_S8_final_table.xlsx` | Wide-format one-row-per-cell summary, P1_PT |
+| `combined_BCR_S9.rds` | combineBCR() output -- named list of scRepertoire-ready data frames |
+| `All_S9_bcr_with_CTstrict.tsv` | Master BCR table (both samples) with CTstrict joined |
+| `integrated_S9_scRep.rds` | Seurat object with scRepertoire metadata (CTstrict, cloneSize, etc.) |
+| `Plots/Part3/Trees/` | PDF tree plots for top 5 clones per sample |
+| `Plots/Part3/clonal_homeostasis.pdf` | Clonal homeostasis stacked bar per sample |
+| `Plots/Part3/shared_cells_bar_P1.pdf` | Shared vs. exclusive cell counts per tissue |
+| `Plots/Part3/clonal_network_all.pdf` | clonalNetwork UMAP -- all clusters |
+| `Plots/Part3/clonal_network_PC.pdf` | clonalNetwork UMAP -- PC cluster |
+| `Plots/Part3/clonal_occupy_counts.pdf` | occupiedscRepertoire -- absolute counts |
+| `Plots/Part3/clonal_occupy_proportion.pdf` | occupiedscRepertoire -- proportions |
+| `Plots/Part3/shared_clones_dotplot_P1.pdf` | Shared clone dot plot -- Patient 1 |
+
+---
+
+*Part 3 complete. All BCR analysis outputs (per-sample annotation, clonal trees,
+cross-sample sharing) and GEX outputs (integration, cell type annotation, UMAP)
+are now in a single annotated Seurat object ready for downstream statistical
+analysis and figure preparation.*

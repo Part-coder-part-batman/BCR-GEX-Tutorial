@@ -1,0 +1,408 @@
+---
+title: "BCR + GEX Integration Tutorial — Part 1: BCR Sequence Processing"
+subtitle: "From Immcantation output to a clean, clone-annotated BCR table"
+author: "Nachi Nathan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = TRUE,
+  warning = FALSE
+)
+```
+
+---
+
+# Prerequisites
+
+Before running this part of the tutorial, make sure the following are in place.
+
+**VDJ assignment completed**
+This tutorial picks up after V(D)J gene assignment has been run on your Cell
+Ranger output using the Immcantation Docker container. If you have not done this
+yet, work through `00_Docker_Setup_and_VDJ_Assignment.md` first. That guide
+covers installing Docker, pulling the Immcantation image, and running
+`AssignGenes.py` and `MakeDb.py` to produce the AIRR TSV files used here.
+
+**Input files required**
+
+| File | Where it comes from |
+|------|-------------------|
+| `<sample>_airr_db-pass.tsv` | Output of `MakeDb.py` from the Docker step |
+| `filtered_contig_annotations.csv` | Cell Ranger VDJ output, at `per_sample_outs/<sample>/vdj_b/` |
+| IMGT germline reference (`human/vdj/`) | Downloaded via fetch_imgtdb.sh from the Immcantation repository (see instructions below) |
+
+**Downloading the IMGT germline reference**
+
+Run the following commands in a terminal (not an R session) once before running
+the tutorial. This clones the Immcantation repository and downloads the
+formatted IMGT germline sequences to a folder of your choice.
+
+```bash
+git clone https://github.com/immcantation/immcantation
+immcantation/scripts/fetch_imgtdb.sh -o germlines
+```
+
+The human VDJ reference will be at `germlines/human/vdj/`. Set `IMGT_REF_DIR`
+in the paths chunk to point to this folder.
+
+**R packages required**
+
+```r
+install.packages(c("dplyr", "ggplot2", "readr", "stringr"))
+
+# Bioconductor / CRAN immunology packages
+install.packages("BiocManager")
+BiocManager::install(c("airr", "alakazam", "dowser", "scoper", "shazam"))
+```
+
+**R version:** This tutorial was developed under R 4.3. Any R 4.x version should work.
+
+---
+
+# Overview
+
+This part of the tutorial covers BCR sequence processing using the Immcantation
+R toolkit. Starting from the AIRR TSV produced by IgBLAST, we QC and filter
+the sequences, assign B cell clones, reconstruct germline sequences, and
+calculate somatic hypermutation (SHM). The output is a clean, annotated TSV
+per sample that feeds into Part 2 (Seurat integration) and Part 3 (repertoire
+visualization).
+
+The dataset comes from Nathan et al., *Immunity* (2026), a study of
+tumor-draining lymph nodes in ovarian cancer patients. We use two samples from
+the same patient: a lymph node (LN) and a primary tumor (PT). This pairing
+lets us demonstrate multi-sample handling and cross-tissue clone tracking.
+
+The steps in this part are:
+
+1. **Load and filter** -- load the AIRR TSV and Cell Ranger annotations, append
+   sample IDs to barcodes, and apply four sequential QC filters.
+2. **Clonal threshold** -- determine the CDR3 distance threshold separating
+   clonally related from unrelated sequences.
+3. **Clone assignment** -- hierarchical clustering to define clones, followed
+   by human-readable clone ID encoding.
+4. **Germline reconstruction and SHM** -- reconstruct unmutated germlines and
+   calculate per-sequence mutation frequency.
+5. **Save** -- write a clean TSV per sample for downstream use.
+6. **Repertoire overview** -- rank-abundance, clone size, and SHM plots to
+   characterize each sample before moving to GEX.
+
+---
+
+# Setup
+
+## Paths
+
+Set these variables to match your file structure before running anything else.
+Every path downstream is derived from these, so this is the only place you need
+to make changes.
+
+```{r paths}
+# File containing BCR helper functions (BCR_functions.R from the tutorial repo)
+BCR_FUNCTIONS_FILE <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github/BCR_functions.R"
+
+# IMGT germline reference directory (human VDJ)
+# This is the folder you copied out of the Docker container during the VDJ step.
+# It should contain files like IGHV.fasta, IGHD.fasta, IGHJ.fasta, etc.
+IMGT_REF_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github/human/vdj"
+
+# Root directory — each sample has its own subfolder here
+ROOT_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github"
+
+# Sample definitions
+# Each entry needs: a sample ID, the path to the AIRR TSV, the path to the
+# Cell Ranger filtered_contig_annotations.csv, and an output folder.
+samples <- list(
+  P1_LN = list(
+    sample_id        = "P1_LN",
+    airr_file        = file.path(ROOT_DIR, "P1_LN/results/P1_LN_airr_db-pass.tsv"),
+    annotations_file = file.path(ROOT_DIR, "P1_LN/P1_LN_filtered_contig_annotations.csv"),
+    output_dir       = file.path(ROOT_DIR, "P1_LN/Output")
+  ),
+  P1_PT = list(
+    sample_id        = "P1_PT",
+    airr_file        = file.path(ROOT_DIR, "P1_PT/results/P1_PT_airr_db-pass.tsv"),
+    annotations_file = file.path(ROOT_DIR, "P1_PT/P1_PT_filtered_contig_annotations.csv"),
+    output_dir       = file.path(ROOT_DIR, "P1_PT/Output")
+  )
+)
+
+# Create output directories if they don't exist
+for (s in samples) {
+  if (!dir.exists(s$output_dir)) dir.create(s$output_dir, recursive = TRUE)
+}
+```
+
+## Packages
+
+```{r packages, message=FALSE}
+suppressPackageStartupMessages({
+  library(airr)
+  library(alakazam)
+  library(dplyr)
+  library(dowser)
+  library(ggplot2)
+  library(readr)
+  library(scoper)
+  library(shazam)
+  library(stringr)
+})
+```
+
+## Load functions
+
+```{r load-functions}
+source(BCR_FUNCTIONS_FILE)
+```
+
+---
+
+# Step 1: BCR QC and Clonal Assignment
+
+## 1.1 Load and filter
+
+We load the AIRR TSV from Immcantation and the `filtered_contig_annotations.csv`
+from Cell Ranger. The annotations file provides UMI counts per contig, which we
+need later to resolve cells with multiple light chains.
+
+The first thing we do after loading is append the sample ID to every barcode.
+Cell Ranger barcodes are not unique across samples -- both samples will have
+cells called `ACGT...TGCA-1` -- so without a suffix they collide when samples
+are combined downstream. Adding the sample ID at this stage keeps the IDs
+unambiguous through every subsequent step.
+
+After loading, we apply four sequential QC filters:
+
+1. Remove non-productive sequences (frameshifts, stop codons)
+2. Remove cells with more than one heavy chain -- these are likely doublets
+3. Remove light chains with no paired heavy chain
+4. For cells with multiple light chains, keep only the one with the highest UMI count
+
+```{r load-and-filter}
+bcr_list <- list()
+
+for (s in samples) {
+  message("Loading and filtering: ", s$sample_id)
+
+  bcr <- process_bcr_data(
+    airr_file        = s$airr_file,
+    annotations_file = s$annotations_file,
+    sample_id        = s$sample_id
+  )
+  bcr <- filter_bcr_data(bcr)
+
+  bcr_list[[s$sample_id]] <- bcr
+}
+```
+
+The QC summary above shows how many sequences were removed at each step and
+the final chain pairing breakdown. A proportion of heavy-only cells is expected
+-- these are cells where the light chain contig did not pass Cell Ranger's
+filters and are kept in the table for clone assignment purposes.
+
+## 1.2 Clonal threshold
+
+To define clones we use hierarchical clustering on the heavy chain CDR3
+sequences. The key parameter is the distance threshold -- sequences within this
+threshold of each other (measured as normalized Hamming distance on the CDR3)
+are assigned to the same clone.
+
+We determine the threshold automatically using SHazaM's Gaussian mixture model
+(GMM). The model fits two distributions to the pairwise nearest-neighbor
+distance histogram: one for within-clone pairs (short distances) and one for
+between-clone pairs (longer distances). The threshold is placed at the point
+that best separates the two.
+
+Inspect the plots below for each sample. The two samples look quite different,
+and both patterns are biologically meaningful:
+
+- **P1_LN** shows a classic bimodal distribution with a clear valley. The
+  threshold lands right in the valley -- this is the ideal case.
+- **P1_PT** shows a heavily skewed distribution with almost no second peak.
+  This reflects a clonally expanded tumor sample: most B cells belong to a
+  small number of large clones, so the majority of pairwise comparisons are
+  within-clone (short distances) and there are too few between-clone pairs to
+  form a visible second peak. The automatic threshold is still reasonable, but
+  the shape of the distribution is itself informative about the biology.
+
+If your data shows a less clear separation and the automatic threshold looks
+wrong, you can override it by setting a numeric value in `USER_THRESHOLD` below.
+
+```{r clonal-threshold, fig.width=7, fig.height=4}
+# ---- User threshold override ------------------------------------------------
+# By default the threshold is determined automatically by the GMM (NULL).
+# If the automatic threshold looks wrong for a sample, set a numeric value here
+# (e.g. 0.15) to override it. The override will appear as a red dashed line
+# on the distance histogram so you can verify it visually.
+#
+# When to override: if the distribution is unimodal (no clear valley) and the
+# auto threshold lands in an obviously wrong place, try a value in the
+# 0.10-0.20 range and re-run this chunk.
+USER_THRESHOLD <- list(
+  P1_LN = NULL,   # NULL = use automatic threshold
+  P1_PT = NULL    # NULL = use automatic threshold
+)
+# -----------------------------------------------------------------------------
+
+threshold_list <- list()
+
+for (s_id in names(bcr_list)) {
+
+  thr_res   <- plot_clonal_thresholds(bcr_list[[s_id]],
+                                      user_defined_threshold = USER_THRESHOLD[[s_id]])
+  threshold <- if (!is.null(USER_THRESHOLD[[s_id]])) USER_THRESHOLD[[s_id]] else thr_res$auto_threshold
+  message(if (!is.null(USER_THRESHOLD[[s_id]])) "User-defined" else "Auto",
+          " threshold for ", s_id, ": ", signif(threshold, 4))
+
+  print(thr_res$shazam_plot +
+    ggplot2::ggtitle(paste("GMM threshold fit --", s_id)))
+
+  threshold_list[[s_id]] <- threshold
+}
+```
+
+## 1.3 Clone assignment
+
+With the threshold in hand we run hierarchical clonal clustering. Two settings
+are worth noting:
+
+- `only_heavy = TRUE`: clonal grouping is driven by the heavy chain. This is
+  standard practice -- the heavy chain CDR3 carries more sequence diversity and
+  is more informative for clone definition.
+- `split_light = TRUE`: after heavy-chain clustering, any clone containing cells
+  with different light chains is split into sub-clones. This resolves cases
+  where two cells share the same heavy chain rearrangement but carry different
+  receptors.
+
+After assigning clones we replace the default numeric clone IDs with
+informative strings. Each clone ID encodes four pieces of information: the
+sample ID, a unique random code, the clone size, and the heavy chain isotype
+composition. For example, `P1_LN_aB3x_14_G1M` is a clone from the LN sample
+with 14 cells carrying both IgG1 and IgM. The random code ensures uniqueness
+when data from multiple samples are later combined -- no two clones from
+different samples can accidentally share an ID.
+
+```{r clone-assignment}
+for (s_id in names(bcr_list)) {
+
+  bcr <- bcr_list[[s_id]]
+  bcr <- define_clones_basic(bcr, threshold = threshold_list[[s_id]], sample_id = s_id)
+  bcr <- annotate_clone_ids(bcr, sample_id = s_id)
+  qc_clone_assignment(bcr, bcr)
+
+  bcr_list[[s_id]] <- bcr
+}
+```
+
+## 1.4 Germline reconstruction and somatic hypermutation
+
+To measure somatic hypermutation (SHM) we need the unmutated germline sequence
+each B cell started from. We reconstruct this using the IMGT reference database
+via `dowser::createGermlines()`.
+
+Once germlines are in hand, `shazam::observedMutations()` counts the differences
+between each sequence and its germline across the V gene region. We calculate
+both mutation frequency (proportion of positions mutated) and raw mutation count,
+stored as `mu_freq` and `mu_count` in the output. These will be used for SHM
+analysis in Part 3.
+
+This is the slowest step in the pipeline -- expect a minute or two per sample.
+
+```{r germlines-and-mutations}
+for (s_id in names(bcr_list)) {
+  message("Reconstructing germlines for: ", s_id)
+
+  mut_outputs <- reconstruct_germlines_and_mutations(
+    bcr_list[[s_id]],
+    reference_dir = IMGT_REF_DIR,
+    nproc         = 1
+  )
+
+  bcr_list[[s_id]] <- mut_outputs$results_with_mut
+}
+```
+
+## 1.5 Save
+
+We save a TSV for each sample. These files are the input for Step 4 in Part 2
+(Add BCR to Seurat), after GEX QC and doublet removal are complete. They are
+also used directly in Part 3 for repertoire visualization.
+
+```{r save-bcr}
+for (s in samples) {
+  bcr_tsv <- file.path(s$output_dir, paste0(s$sample_id, "_bcr_data.tsv"))
+  write.table(bcr_list[[s$sample_id]], file = bcr_tsv,
+              sep = "\t", row.names = FALSE, quote = FALSE)
+  message("Saved: ", bcr_tsv)
+}
+```
+
+## 1.6 Repertoire overview
+
+Before moving to GEX it is worth getting a quick overview of each sample's
+repertoire. Three plots are shown for each sample:
+
+- **Rank-abundance**: each point is a clone ranked by size. A flat curve means
+  many clones of similar size (polyclonal). A steep early drop-off means a few
+  dominant clones (oligoclonal).
+- **Clone size distribution**: how many clones have 1 cell, 2 cells, 3 cells,
+  and so on.
+- **Mutation frequency by isotype**: SHM frequency split by heavy chain
+  isotype. IgM should be near zero (naive/unswitched); IgG and IgA should be
+  higher, reflecting affinity maturation through class switching.
+
+```{r repertoire-plots, fig.width=8, fig.height=4}
+for (s_id in names(bcr_list)) {
+
+  bcr <- bcr_list[[s_id]]
+
+  clone_plots <- visualize_clones(bcr)
+  print(clone_plots$rank_abundance_plot +
+    ggplot2::ggtitle(paste("Rank-abundance --", s_id)))
+  print(clone_plots$clone_size_plot +
+    ggplot2::ggtitle(paste("Clone size distribution --", s_id)))
+
+  mf_plots <- plot_mutation_frequencies(bcr)
+  print(mf_plots$by_isotype +
+    ggplot2::ggtitle(paste("Mutation frequency by isotype --", s_id)))
+}
+```
+
+### What the plots show
+
+The two samples show a striking contrast that reflects their biology:
+
+**P1_LN (lymph node)** is a polyclonal, actively diversifying repertoire. The
+rank-abundance curve is flat, the clone size distribution is dominated by
+singletons, and the mutation frequency plot shows the expected isotype
+hierarchy -- IgM near zero, IgG and IgA progressively higher. This is
+consistent with an active germinal center producing a broad, maturing B cell
+response.
+
+**P1_PT (primary tumor)** is oligoclonal and more contracted. The top clone
+reaches roughly 3.3% abundance, the clone size distribution has a long tail
+extending to clones of 100+ cells, and mutation frequencies are lower and more
+compressed across isotypes. This is consistent with a selected, expanded
+population that has largely exited the germinal center reaction rather than one
+that is actively diversifying.
+
+This contrast -- a diverse, functional LN repertoire alongside a contracted,
+oligoclonal tumor repertoire -- is one of the central observations of the
+accompanying paper. In Parts 2 and 3 we will be able to ask which cell types
+the expanded tumor clones belong to.
+
+---
+
+*Part 1 complete. TSV files saved to the Output folder for each sample.
+Continue to Part 2 (BCR_GEX_Tutorial_Part2.Rmd) for GEX QC, integration,
+and cluster annotation.*

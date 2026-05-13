@@ -1,0 +1,1944 @@
+---
+title: "BCR + GEX Integration Tutorial — Part 2: Seurat Analysis and Annotation"
+subtitle: "From Cell Ranger GEX output to an annotated B cell Seurat object"
+author: "Nachi Nathan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = TRUE,
+  warning = FALSE
+)
+```
+
+---
+
+# Prerequisites
+
+Before running this part, the following must be in place.
+
+**Part 1 must be complete**
+You need the `_bcr_data.tsv` files produced at the end of Part 1
+(`BCR_GEX_Tutorial_Part1.Rmd`). These are joined to the Seurat objects in
+Step 4 of this part.
+
+**Input files required**
+
+| File | Where it comes from |
+|------|-------------------|
+| `P1_LN_bcr_data.tsv` | Part 1 output, at `P1_LN/Output/` |
+| `P1_PT_bcr_data.tsv` | Part 1 output, at `P1_PT/Output/` |
+| `sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
+
+**R packages required**
+
+```r
+install.packages(c("dplyr", "ggplot2", "data.table", "tibble",
+                   "viridis", "scales", "patchwork", "pheatmap"))
+
+# Seurat v5
+install.packages("Seurat")
+
+# Optional but recommended for faster DEG computation
+install.packages("devtools")
+devtools::install_github("immunogenomics/presto")
+```
+
+**R version:** This tutorial was developed under R 4.3 with Seurat v5. Seurat v4
+will not work with the `IntegrateLayers()` workflow used in Step 6.
+
+---
+
+# Overview
+
+This part covers the complete single-cell GEX analysis pipeline, from loading
+raw count matrices through to a fully annotated Seurat object. It runs in
+sequence -- each step feeds directly into the next -- and produces a single
+output file at the end: `integrated_S7_annotated.rds`.
+
+The steps are:
+
+1. **GEX QC** -- load `.h5` count matrices, inspect quality metrics, filter
+   low-quality cells.
+2. **Doublet removal** -- keep only CD79A-positive cells and remove B cell /
+   non-B cell doublets.
+3. **Add BCR metadata** -- join the BCR TSV from Part 1 to each Seurat object
+   by barcode matching.
+4. **Solo GEX analysis** -- per-sample normalization, HVG selection (with IG/TCR
+   gene exclusion), PCA, clustering, UMAP, BCR overlay.
+5. **Integration** -- RPCA batch correction across samples, joint UMAP,
+   joint clustering.
+6. **Cluster annotation** -- DotPlot, BCR metadata, DEG analysis, final label
+   assignment.
+
+---
+
+# Setup
+
+Set these variables before running anything else. All paths downstream are
+derived from these.
+
+```{r setup-session}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(Matrix)
+  library(dplyr)
+  library(data.table)
+  library(tibble)
+  library(ggplot2)
+  library(viridis)
+  library(scales)
+  library(patchwork)
+  library(pheatmap)
+})
+
+# Root directory -- each sample has its own subfolder here
+ROOT_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github"
+
+# RDS output directory -- all Seurat objects are written here
+RDS_DIR <- file.path(ROOT_DIR, "RDS_Objects")
+if (!dir.exists(RDS_DIR)) dir.create(RDS_DIR, recursive = TRUE)
+
+# Sample definitions
+samples <- list(
+  P1_LN = list(
+    sample_id  = "P1_LN",
+    h5         = file.path(ROOT_DIR, "P1_LN/P1_LN_sample_filtered_feature_bc_matrix.h5"),
+    bcr_tsv    = file.path(ROOT_DIR, "P1_LN/Output/P1_LN_bcr_data.tsv"),
+    output_dir = RDS_DIR
+  ),
+  P1_PT = list(
+    sample_id  = "P1_PT",
+    h5         = file.path(ROOT_DIR, "P1_PT/P1_PT_sample_filtered_feature_bc_matrix.h5"),
+    bcr_tsv    = file.path(ROOT_DIR, "P1_PT/Output/P1_PT_bcr_data.tsv"),
+    output_dir = RDS_DIR
+  )
+)
+
+message("Ready. Samples: ", paste(names(samples), collapse = ", "))
+```
+
+---
+
+# Step 2: GEX QC and Filtering
+
+## 2.1 QC thresholds
+
+The thresholds below are applied uniformly to all samples. Inspect the violin
+plots in section 2.3 carefully before accepting them for your own data -- the
+right values depend on the tissue and library quality.
+
+| Parameter | Value | What it removes |
+|-----------|-------|----------------|
+| `min_features` | 250 | Empty droplets with almost no detected genes |
+| `max_features` | 6,500 | Likely doublets with abnormally high gene counts |
+| `min_UMI` | 500 | Low-quality or empty droplets |
+| `max_UMI` | 35,000 | Likely doublets with abnormally high UMI counts |
+| `filter_mt` | 10% | Damaged or dying cells |
+
+When a cell is damaged or dying, cytoplasmic mRNA leaks out while mitochondrial
+transcripts remain protected inside the organelle, producing a characteristic
+signature of high mt% alongside low gene and UMI counts. A threshold of 10% is
+appropriate for lymphoid tissue. For tumor samples with many metabolically active
+cells, a slightly higher threshold may be warranted -- always inspect the
+distribution first.
+
+```{r thresholds}
+min_features   <- 250
+max_features   <- 6500
+min_UMI        <- 500
+max_UMI        <- 35000
+filter_mt      <- 10
+
+mito_pattern   <- "^MT-"   # "^MT-" for human, "^mt-" for mouse
+min_cells_gene <- 5        # genes detected in fewer cells than this are dropped
+```
+
+## 2.2 Load count matrices and create Seurat objects
+
+We load the `.h5` count matrix for each sample and create a Seurat object.
+Mitochondrial percentage is calculated immediately after loading, before any
+filtering, so we have the full distribution to inspect.
+
+We also suffix every barcode with the sample name at this stage. Cell Ranger
+barcodes are not unique across samples -- both P1_LN and P1_PT contain cells
+called `ACGT...TGCA-1` -- and adding the sample ID prevents collisions when
+samples are merged later. This matches the barcode suffixing done on the BCR
+side in Part 1.
+
+```{r load-counts}
+seurat_list <- list()
+
+for (s in samples) {
+
+  message("Loading: ", s$sample_id)
+
+  if (!file.exists(s$h5)) {
+    stop("H5 file not found for ", s$sample_id, ":\n  ", s$h5,
+         "\nCheck that the path is correct.")
+  }
+
+  counts <- Read10X_h5(s$h5)
+  if (is.list(counts)) counts <- counts[["Gene Expression"]]
+
+  obj <- CreateSeuratObject(
+    counts       = counts,
+    project      = s$sample_id,
+    min.cells    = min_cells_gene,
+    min.features = 0
+  )
+
+  obj[["percent.mt"]] <- PercentageFeatureSet(obj, pattern = mito_pattern)
+  obj <- RenameCells(obj, new.names = paste0(colnames(obj), "_", s$sample_id))
+
+  message("  Cells: ", ncol(obj), " | Genes: ", nrow(obj))
+  seurat_list[[s$sample_id]] <- obj
+}
+```
+
+The two samples loaded as expected:
+
+| Sample | Cells | Genes |
+|--------|-------|-------|
+| P1_LN  | 6,061 | 18,521 |
+| P1_PT  | 8,067 | 19,889 |
+
+P1_PT has more cells and a slightly larger detected transcriptome, consistent
+with the greater cellular complexity of tumor tissue.
+
+## 2.3 Inspect QC metrics before filtering
+
+Look at the violin plots carefully before proceeding. You are looking for a
+unimodal distribution of `nFeature_RNA` with a lower tail of empty droplets and
+possibly an upper tail of doublets; `percent.mt` clustered low with a tail of
+damaged cells; and a linear relationship in the UMI vs genes scatter, with
+cells falling well above the line being candidate doublets.
+
+```{r qc-plots-pre, fig.width=10, fig.height=4}
+for (s_id in names(seurat_list)) {
+
+  obj <- seurat_list[[s_id]]
+
+  print(
+    VlnPlot(obj,
+            features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+            pt.size  = 0.1,
+            ncol     = 3) &
+      ggplot2::labs(title = paste0(s_id, " -- QC metrics (pre-filter)"))
+  )
+
+  print(FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mt") +
+    ggplot2::ggtitle(paste0(s_id, " -- UMI vs mt%")))
+
+  print(FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
+    ggplot2::ggtitle(paste0(s_id, " -- UMI vs genes detected")))
+}
+```
+
+```{r qc-summary-pre}
+pre_stats <- lapply(names(seurat_list), function(s_id) {
+  obj <- seurat_list[[s_id]]
+  data.frame(
+    Sample        = s_id,
+    Cells         = ncol(obj),
+    Median_genes  = median(obj$nFeature_RNA),
+    Median_UMI    = median(obj$nCount_RNA),
+    Median_mt_pct = round(median(obj$percent.mt), 2),
+    Max_mt_pct    = round(max(obj$percent.mt), 2),
+    Cells_mt_gt10 = sum(obj$percent.mt > 10),
+    Cells_gene_hi = sum(obj$nFeature_RNA > max_features),
+    Cells_gene_lo = sum(obj$nFeature_RNA < min_features),
+    Cells_UMI_hi  = sum(obj$nCount_RNA > max_UMI),
+    Cells_UMI_lo  = sum(obj$nCount_RNA < min_UMI)
+  )
+})
+knitr::kable(do.call(rbind, pre_stats), caption = "QC summary before filtering")
+```
+
+The two samples have notably different QC profiles, reflecting their biology
+rather than any technical problem.
+
+**P1_LN** has a median of 1,356 genes and 3,288 UMIs per cell -- consistent with
+a lymph node where many cells are resting with modest transcriptional output.
+The mitochondrial distribution has a median of 4.9% with 479 cells (7.9%) above
+the 10% threshold, confirming a genuine tail of damaged cells. Very few cells
+hit the upper gene or UMI thresholds, suggesting doublets are rare.
+
+**P1_PT** has higher median genes (1,857) and UMIs (5,086) per cell. The mt%
+distribution is actually cleaner (median 1.67%), but the maximum of 91.04% shows
+some severely damaged cells are present. P1_PT has considerably more high-UMI
+cells (212 above 35,000) and more low-gene cells (233 below 250), both typical
+of tumor tissue which tends to be harder to dissociate cleanly.
+
+## 2.4 Apply QC filters
+
+```{r filter}
+filter_summary <- list()
+
+for (s_id in names(seurat_list)) {
+
+  obj          <- seurat_list[[s_id]]
+  cells_before <- ncol(obj)
+
+  obj <- subset(
+    obj,
+    subset = nFeature_RNA >= min_features &
+             nFeature_RNA <= max_features &
+             nCount_RNA   >= min_UMI      &
+             nCount_RNA   <= max_UMI      &
+             percent.mt   <= filter_mt
+  )
+
+  cells_after <- ncol(obj)
+  message(sprintf(
+    "%s -- Cells kept: %d / %d  (%.1f%% retained, %d removed)",
+    s_id, cells_after, cells_before,
+    100 * cells_after / cells_before,
+    cells_before - cells_after
+  ))
+
+  filter_summary[[s_id]] <- data.frame(
+    Sample        = s_id,
+    Cells_before  = cells_before,
+    Cells_after   = cells_after,
+    Cells_removed = cells_before - cells_after,
+    Pct_retained  = round(100 * cells_after / cells_before, 1)
+  )
+
+  seurat_list[[s_id]] <- obj
+}
+
+knitr::kable(do.call(rbind, filter_summary), caption = "Filtering summary")
+```
+
+Both samples retained over 90% of cells -- P1_LN 92.0% (485 removed) and
+P1_PT 90.9% (732 removed). Most removed cells were damaged (high mt%) rather
+than doublets. The higher absolute number removed from P1_PT reflects both its
+larger starting size and the greater proportion of debris typical of tumor tissue.
+
+## 2.5 Inspect QC metrics after filtering
+
+```{r qc-plots-post, fig.width=10, fig.height=4}
+for (s_id in names(seurat_list)) {
+  print(
+    VlnPlot(seurat_list[[s_id]],
+            features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+            pt.size  = 0.1,
+            ncol     = 3) &
+      ggplot2::labs(title = paste0(s_id, " -- QC metrics (post-filter)"))
+  )
+}
+```
+
+```{r qc-summary-post}
+post_stats <- lapply(names(seurat_list), function(s_id) {
+  obj <- seurat_list[[s_id]]
+  data.frame(
+    Sample        = s_id,
+    Cells         = ncol(obj),
+    Median_genes  = median(obj$nFeature_RNA),
+    Median_UMI    = median(obj$nCount_RNA),
+    Median_mt_pct = round(median(obj$percent.mt), 2),
+    Max_mt_pct    = round(max(obj$percent.mt), 2)
+  )
+})
+knitr::kable(do.call(rbind, post_stats), caption = "QC summary after filtering")
+```
+
+**A note on Seurat v5:** You may see a message saying `Default search for "data"
+layer in "RNA" assay yielded no results; utilizing "counts" layer instead`. This
+is expected -- in Seurat v5 the normalised data layer is only created after
+`NormalizeData()`, which runs in Step 5. The warning is harmless.
+
+## 2.6 Save post-QC objects
+
+```{r save-step2}
+for (s in samples) {
+  out_path <- file.path(s$output_dir, paste0(s$sample_id, "_S2_postQC.rds"))
+  saveRDS(seurat_list[[s$sample_id]], file = out_path)
+  message("Saved: ", out_path)
+}
+```
+
+---
+
+# Step 3: Doublet Removal and B Cell Enrichment
+
+## 3.1 Why a dedicated doublet removal step?
+
+Standard GEX QC (Step 2) catches many doublets by removing cells with abnormally
+high gene or UMI counts. But those filters work at the level of the whole
+transcriptome -- they miss a different kind of doublet: a B cell stuck to a T
+cell, monocyte, or NK cell inside the same droplet. These "phenotypic doublets"
+look perfectly normal by count statistics but carry the wrong GEX profile and
+land in unexpected positions during clustering.
+
+Our approach is simple and interpretable. We keep only CD79A-positive cells
+(the canonical pan-B cell marker), then flag any cell that co-expresses a
+non-B cell marker. This is conservative -- it removes only cells with a strong,
+unambiguous signal for a contaminating cell type -- and every removed cell has
+a clear reason. For datasets that are not B-cell-enriched, algorithmic doublet
+detection (DoubletFinder, Scrublet) on the full object before this step would
+be the standard approach.
+
+## 3.2 Helper function
+
+```{r doublet-helper}
+# Marker-based doublet detection
+# Returns barcodes of cells that are CD79A+ AND express any non-B cell marker
+get_doublet_cells <- function(seurat_obj) {
+
+  non_b_markers <- c("CD3E", "CD3D", "CD4", "CD8A",   # T cells
+                     "LYZ",  "CST3",                   # Monocytes / myeloid
+                     "KLRD1", "KLRB1", "CD247")        # NK cells
+
+  cd79a <- tryCatch(
+    FetchData(seurat_obj, vars = "CD79A", layer = "counts")[[1]],
+    error = function(e) return(NULL)
+  )
+  if (is.null(cd79a)) return(NULL)
+
+  doublet_cells <- lapply(non_b_markers, function(marker) {
+    tryCatch({
+      marker_expr <- FetchData(seurat_obj, vars = marker, layer = "counts")[[1]]
+      rownames(seurat_obj@meta.data)[cd79a > 0 & marker_expr > 0]
+    }, error = function(e) return(NULL))
+  })
+
+  unique(unlist(doublet_cells))
+}
+```
+
+The non-B marker panel covers the three main contaminating cell types in a
+B-cell-enriched suspension: T cells (`CD3E`, `CD3D`, `CD4`, `CD8A`), monocytes
+and myeloid cells (`LYZ`, `CST3`), and NK cells (`KLRD1`, `KLRB1`, `CD247`).
+Depending on your tissue context you may need to adjust this panel -- for example,
+adding epithelial markers for mucosal tissue.
+
+## 3.3 B cell enrichment and doublet removal
+
+```{r filter-doublets}
+summary_rows <- list()
+
+for (s_id in names(seurat_list)) {
+
+  message(paste(rep("-", 60), collapse = ""))
+  message("Processing: ", s_id)
+
+  obj     <- seurat_list[[s_id]]
+  n_total <- ncol(obj)
+  message("  Cells in (post-QC):          ", n_total)
+
+  # Keep only B cells (CD79A > 0)
+  b_cells <- tryCatch({
+    cd79a <- FetchData(obj, vars = "CD79A", layer = "counts")[[1]]
+    rownames(obj@meta.data)[cd79a > 0]
+  }, error = function(e) {
+    message("  WARNING: CD79A not found -- skipping B cell filter.")
+    return(colnames(obj))
+  })
+
+  obj      <- subset(obj, cells = b_cells)
+  n_bcells <- ncol(obj)
+  message("  B cells (CD79A+):            ", n_bcells,
+          "  (", round(100 * n_bcells / n_total, 1), "% of input)")
+
+  # Identify and remove doublets
+  doublets   <- get_doublet_cells(obj)
+  n_doublets <- length(doublets)
+  message("  Doublets detected:           ", n_doublets)
+
+  if (n_doublets > 0) obj <- subset(obj, cells = setdiff(colnames(obj), doublets))
+
+  n_final <- ncol(obj)
+  message("  Cells out (post-doublet):    ", n_final,
+          "  (", round(100 * n_final / n_bcells, 1), "% of B cells retained)")
+
+  seurat_list[[s_id]] <- obj
+
+  summary_rows[[s_id]] <- data.frame(
+    Sample           = s_id,
+    Cells_in         = n_total,
+    B_cells_CD79Apos = n_bcells,
+    Pct_B_cells      = round(100 * n_bcells / n_total, 1),
+    Doublets_removed = n_doublets,
+    Cells_out        = n_final,
+    Pct_retained     = round(100 * n_final / n_bcells, 1)
+  )
+}
+
+knitr::kable(do.call(rbind, summary_rows), caption = "Doublet removal summary")
+```
+
+The most striking difference between the two samples is the B cell fraction:
+46% for P1_LN versus 85.1% for P1_PT. This is not a quality issue -- P1_PT was
+FACS-sorted for B cells (CD19+) before sequencing, so the non-B cell fraction
+was already depleted at the library preparation stage. P1_LN was sequenced as a
+bulk suspension without prior sorting, containing the full cellular composition
+of the lymph node. The CD79A filter brings both objects to the same starting
+point for downstream analysis.
+
+Doublet rates are similar and expected: 272 removed from P1_LN (10.6% of CD79A+
+cells) and 578 from P1_PT (9.3%). Both samples retain just under 90% of their
+B cells after doublet removal.
+
+## 3.4 Save post-doublet objects
+
+```{r save-step3}
+for (s in samples) {
+  out_path <- file.path(s$output_dir, paste0(s$sample_id, "_S3_postDoublet.rds"))
+  saveRDS(seurat_list[[s$sample_id]], file = out_path)
+  message("Saved: ", out_path)
+}
+```
+
+---
+
+# Step 4: Adding BCR Metadata
+
+## 4.1 What gets added and why
+
+The BCR TSV from Part 1 has one row per contig. Before joining to Seurat we
+reshape it to one row per cell, pulling the relevant columns from the heavy and
+light chain rows separately. The metadata columns added are:
+
+| Column | Source | Description |
+|--------|--------|-------------|
+| `BCR` | heavy chain | TRUE if cell has a detected heavy chain |
+| `c_call` | heavy chain | Isotype (IGHM, IGHG1, IGHA1 etc.) |
+| `clone_id` | heavy chain | Clone identifier |
+| `clone_count` | heavy chain | Number of cells in this clone |
+| `v_call` | heavy chain | V gene assignment |
+| `j_call` | heavy chain | J gene assignment |
+| `mu_freq_H` | heavy chain | Heavy chain SHM frequency |
+| `umi_count_H` | heavy chain | Heavy chain UMI count |
+| `kappa_lambda` | light chain | IGK or IGL |
+| `mu_freq_L` | light chain | Light chain SHM frequency |
+| `umi_count_L` | light chain | Light chain UMI count |
+
+Cells with no matching BCR entry get `BCR = FALSE` and `NA` for all other BCR
+columns. These are genuine B cells (CD79A+) that did not produce a detected BCR
+sequence, which can happen due to dropout or low VDJ sequencing depth.
+
+## 4.2 Load objects and BCR TSVs, join, and save
+
+```{r add-bcr}
+summary_rows <- list()
+
+for (s in samples) {
+
+  message(paste(rep("=", 60), collapse = ""))
+  message("Processing: ", s$sample_id)
+
+  # Load Seurat object
+  rds_path <- file.path(s$output_dir, paste0(s$sample_id, "_S3_postDoublet.rds"))
+  if (!file.exists(rds_path)) stop("Cannot find RDS for ", s$sample_id, " -- run Step 3 first.")
+  obj <- readRDS(rds_path)
+  message("  B cells loaded (post-doublet): ", ncol(obj))
+
+  # Load BCR TSV
+  if (!file.exists(s$bcr_tsv)) stop("Cannot find BCR TSV for ", s$sample_id, " -- run Part 1 first.")
+  bcr <- data.table::fread(s$bcr_tsv, sep = "\t", data.table = FALSE, nThread = 1)
+  message("  BCR TSV loaded: ", nrow(bcr), " rows")
+
+  # Sanity checks: catch any residual duplicate chains
+  heavy_rows <- dplyr::filter(bcr, locus == "IGH")
+  dup_heavy  <- heavy_rows %>% dplyr::count(cell_id) %>% dplyr::filter(n > 1)
+  if (nrow(dup_heavy) > 0) {
+    warning("  ", nrow(dup_heavy), " cells have >1 heavy chain -- keeping highest UMI.")
+    heavy_rows <- heavy_rows %>%
+      dplyr::group_by(cell_id) %>%
+      dplyr::slice_max(umi_count, n = 1, with_ties = FALSE) %>%
+      dplyr::ungroup()
+  } else {
+    message("  Sanity check passed: no duplicate heavy chains")
+  }
+
+  light_rows <- dplyr::filter(bcr, locus %in% c("IGK", "IGL"))
+  dup_light  <- light_rows %>% dplyr::count(cell_id) %>% dplyr::filter(n > 1)
+  if (nrow(dup_light) > 0) {
+    warning("  ", nrow(dup_light), " cells have >1 light chain -- keeping highest UMI.")
+    light_rows <- light_rows %>%
+      dplyr::group_by(cell_id) %>%
+      dplyr::slice_max(umi_count, n = 1, with_ties = FALSE) %>%
+      dplyr::ungroup()
+  } else {
+    message("  Sanity check passed: no duplicate light chains")
+  }
+
+  # Build per-cell metadata table
+  heavy_meta <- heavy_rows %>%
+    dplyr::transmute(cell_id, c_call, clone_id, clone_count,
+                     v_call, j_call, mu_freq_H = mu_freq, umi_count_H = umi_count)
+
+  light_meta <- light_rows %>%
+    dplyr::transmute(cell_id,
+                     kappa_lambda = ifelse(locus == "IGK", "kappa", "lambda"),
+                     mu_freq_L = mu_freq, umi_count_L = umi_count)
+
+  # Check cell ID overlap and report match rate
+  b_cells     <- colnames(obj)
+  bcr_cells   <- unique(heavy_meta$cell_id)
+  n_matched   <- length(intersect(b_cells, bcr_cells))
+  n_bcr_only  <- length(setdiff(bcr_cells, b_cells))
+  n_gex_only  <- length(setdiff(b_cells, bcr_cells))
+  pct_matched <- round(100 * n_matched / length(b_cells), 1)
+
+  message("  BCR matching:")
+  message("    B cells in Seurat:          ", length(b_cells))
+  message("    Cells with BCR detected:    ", length(bcr_cells))
+  message("    Matched:                    ", n_matched, "  (", pct_matched, "% of B cells)")
+  message("    BCR only (filtered in GEX): ", n_bcr_only)
+  message("    B cells with no BCR:        ", n_gex_only)
+
+  if (pct_matched < 30) {
+    warning("Less than 30% of B cells matched to BCR data for ", s$sample_id,
+            ". Check that barcode suffixes are consistent between Part 1 and Part 2.")
+  }
+
+  # Join BCR metadata onto Seurat cells
+  meta_add <- tibble::tibble(cell_id = b_cells) %>%
+    dplyr::mutate(BCR = cell_id %in% bcr_cells) %>%
+    dplyr::left_join(heavy_meta, by = "cell_id") %>%
+    dplyr::left_join(light_meta, by = "cell_id")
+
+  meta_df <- as.data.frame(meta_add)
+  rownames(meta_df) <- meta_df$cell_id
+  meta_df$cell_id   <- NULL
+  obj <- AddMetaData(obj, metadata = meta_df)
+  message("  BCR+ cells: ", sum(obj$BCR, na.rm = TRUE))
+
+  # Save
+  out_path <- file.path(s$output_dir, paste0(s$sample_id, "_S4_postBCR.rds"))
+  saveRDS(obj, file = out_path)
+  message("  Saved: ", out_path)
+
+  summary_rows[[s$sample_id]] <- data.frame(
+    Sample      = s$sample_id,
+    B_cells     = length(b_cells),
+    BCR_cells   = length(bcr_cells),
+    Matched     = n_matched,
+    Pct_matched = pct_matched,
+    BCR_plus    = sum(obj$BCR, na.rm = TRUE)
+  )
+}
+
+knitr::kable(do.call(rbind, summary_rows), caption = "BCR matching summary")
+```
+
+P1_LN has a match rate of 90.9% -- expected for an unsorted bulk suspension
+where the GEX and VDJ libraries come from the same cells. P1_PT has a lower
+match rate of 59.3%. Differences in library depth between GEX and VDJ runs can
+cause this -- some cells are well-represented in the GEX library but have
+insufficient VDJ sequencing depth to yield a detectable BCR. This is a known
+occurrence in multi-library 10x experiments. If you see a match rate below 30%
+in your own data, the most likely cause is a barcode suffix mismatch between
+Part 1 and Part 2.
+
+## 4.3 Inspect BCR metadata distribution
+
+```{r inspect-bcr}
+for (s in samples) {
+  obj     <- readRDS(file.path(s$output_dir, paste0(s$sample_id, "_S4_postBCR.rds")))
+  bcr_pos <- subset(obj, subset = BCR == TRUE)
+
+  message("\n--- ", s$sample_id, " ---")
+  message("BCR TRUE/FALSE:")
+  print(table(obj$BCR))
+
+  message("Isotype (BCR+ cells):")
+  print(table(bcr_pos$c_call, useNA = "no"))
+
+  message("Top 10 largest clones:")
+  top_clones <- bcr_pos@meta.data %>%
+    dplyr::filter(!is.na(clone_id)) %>%
+    dplyr::distinct(clone_id, clone_count) %>%
+    dplyr::arrange(dplyr::desc(clone_count)) %>%
+    head(10)
+  print(top_clones)
+}
+```
+
+The isotype and clone size distributions confirm the BCR metadata joined
+correctly and are biologically sensible.
+
+**P1_LN** shows a mixed isotype composition with IgM, IgA1, and IgG1 all
+represented. The clone size distribution is flat -- the largest clone has only
+6 cells -- the polyclonal signature of an ongoing, diverse immune response.
+
+**P1_PT** is strikingly different. IgG1 dominates (2,150 cells). The top clones
+contain between roughly 38 and 151 cells each -- highly oligoclonal. This is
+the hallmark of antigen-driven clonal selection and expansion in the tumor
+microenvironment.
+
+## 4.4 BCR summary plots
+
+```{r bcr-plots, fig.width=8, fig.height=4}
+# BCR+ vs BCR- per sample
+bcr_counts <- do.call(rbind, lapply(names(samples), function(s_id) {
+  obj <- readRDS(file.path(samples[[s_id]]$output_dir,
+                           paste0(s_id, "_S4_postBCR.rds")))
+  data.frame(Sample = s_id, Status = ifelse(obj$BCR, "BCR+", "BCR-"),
+             stringsAsFactors = FALSE)
+}))
+
+print(
+  ggplot(bcr_counts, aes(x = Sample, fill = Status)) +
+    geom_bar(position = "fill") +
+    scale_y_continuous(labels = scales::percent_format()) +
+    scale_fill_manual(values = c("BCR+" = "#2E86AB", "BCR-" = "#D9D9D9")) +
+    labs(title = "B cells with and without detected BCR",
+         x = NULL, y = "Percentage of B cells", fill = NULL) +
+    theme_classic(base_size = 13)
+)
+
+# Isotype distribution per sample
+isotype_order <- c("IGHD", "IGHM", "IGHA1", "IGHA2",
+                   "IGHG1", "IGHG2", "IGHG3", "IGHG4", "IGHE")
+
+isotype_counts <- do.call(rbind, lapply(names(samples), function(s_id) {
+  obj     <- readRDS(file.path(samples[[s_id]]$output_dir,
+                               paste0(s_id, "_S4_postBCR.rds")))
+  bcr_pos <- subset(obj, subset = BCR == TRUE)
+  df <- as.data.frame(table(bcr_pos$c_call), stringsAsFactors = FALSE)
+  colnames(df) <- c("Isotype", "Count")
+  df$Pct    <- 100 * df$Count / sum(df$Count)
+  df$Sample <- s_id
+  df
+}))
+
+isotype_counts$Isotype <- factor(isotype_counts$Isotype, levels = isotype_order)
+
+print(
+  ggplot(isotype_counts, aes(x = Isotype, y = Pct, fill = Sample)) +
+    geom_col(position = "dodge") +
+    scale_fill_manual(values = c("P1_LN" = "#2E86AB", "P1_PT" = "#E84855")) +
+    labs(title = "Isotype distribution per sample (BCR+ cells)",
+         x = NULL, y = "% of BCR+ cells", fill = "Sample") +
+    theme_classic(base_size = 13) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+)
+```
+
+The isotype plot makes the LN versus PT contrast immediately visible. P1_LN has
+a balanced distribution across isotypes while P1_PT is dominated by IgG1 --
+a single panel that captures the core immunological difference between the two
+tissue compartments.
+
+---
+
+# Step 5: Solo GEX Analysis
+
+## 5.1 Why we exclude IG and TCR variable genes from HVG selection
+
+Before running the analysis loop, this non-default choice deserves explanation.
+The standard Seurat workflow selects the 2,000 most variable genes and uses them
+for PCA. In B cells this has a specific problem: V(D)J recombination makes the
+V gene transcripts extremely variable across cells, but this variance reflects
+clonal diversity -- which antibody gene a cell expresses -- rather than
+biological cell state.
+
+If we leave these genes in, PCA and UMAP become partly driven by V gene usage.
+Cells sharing a V gene get pulled together regardless of transcriptional identity,
+and biologically meaningful states like germinal center, plasma cell, or memory
+B cell can get distorted.
+
+The fix: run `FindVariableFeatures()` as normal, then remove any gene matching a
+V/D/J pattern from the HVG list before scaling and PCA. The genes are **not
+removed from the object** -- they remain available for feature plots, DEG
+analysis, and everything else. They are only excluded from the features used to
+compute the embedding.
+
+```{r gene-filter-setup}
+variable_gene_patterns <- c(
+  "^IGHV", "^IGKV", "^IGKJ", "^IGLV", "^IGLJ",
+  "^IGHD", "^IGHJ",
+  "^TRAV", "^TRBV", "^TRAJ", "^TRBJ", "^TRBD"
+)
+variable_gene_regex <- paste(variable_gene_patterns, collapse = "|")
+```
+
+One pattern worth clarifying: `^IGHD` catches the IGHD diversity genes
+(e.g. IGHD3-10), not the IgD isotype transcript. The isotype transcript is
+named simply `IGHD` with no number suffix and is not matched by this regex. It
+remains in the HVG list if it is variable, which is correct -- IgD expression
+is one of the best markers distinguishing naive from class-switched B cells.
+
+## 5.2 Marker panel and color scheme
+
+Used for DotPlots and FeaturePlots throughout Steps 5, 6, and 7.
+
+```{r marker-setup}
+b_cell_markers <- c(
+  # B cell identity
+  "CD79A", "CD19", "MS4A1",
+  # Naive
+  "IGHD", "IGHM", "IL4R", "TCL1A",
+  # Memory
+  "CD27", "CD24", "TNFRSF13B",
+  # Germinal center
+  "BCL6", "AICDA", "MEF2B",
+  # Plasmablast / plasma cell
+  "JCHAIN", "MZB1", "XBP1",
+  # Proliferating
+  "MKI67", "UBE2C", "PCNA",
+  # Early activation
+  "CD83", "MYC", "CCND2", "TRAF4", "MIR155HG",
+  # Interferon-stimulated
+  "IFI6", "IFI44", "IFIT1", "IFIT2", "IFIT3",
+  # Atypical memory / ABCs
+  "FCRL4", "FCRL5", "ZBTB32", "ITGAX", "ZEB2",
+  # Exhaustion / regulatory
+  "HAVCR1", "HAVCR2", "TIGIT", "LAG3", "IL10"
+)
+
+isotype_colors <- c(
+  "IGHD"  = "#e41a1c", "IGHM"  = "#377eb8", "IGHA1" = "#a65628",
+  "IGHA2" = "#f781bf", "IGHG1" = "#4daf4a", "IGHG2" = "#984ea3",
+  "IGHG3" = "#ff7f00", "IGHG4" = "#ffff33", "IGHE"  = "#66c2a5"
+)
+```
+
+## 5.3 Cell cycle gene sets
+
+```{r cc-genes}
+s.genes   <- cc.genes.updated.2019$s.genes
+g2m.genes <- cc.genes.updated.2019$g2m.genes
+```
+
+Cell cycle scores are stored as metadata but not regressed out. In a B cell
+dataset, cell cycle state is biologically meaningful -- proliferating cells are
+typically dark zone GC B cells undergoing rapid division, and we want this
+visible in the UMAP.
+
+## 5.4 Per-sample processing loop
+
+For each sample: normalize, find HVGs, exclude IG/TCR variable genes, scale,
+run PCA, select PCs (fewest explaining 80% of variance, floor 10, ceiling 25),
+cluster, run UMAP, score cell cycle, generate a full panel of plots, save.
+
+```{r solo-gex, fig.width=10, fig.height=7}
+var_expl           <- 0.8
+cluster_resolution <- 0.5
+seurat_list        <- list()
+
+for (s in samples) {
+
+  message(paste(rep("=", 60), collapse = ""))
+  message("Processing: ", s$sample_id)
+
+  rds_in <- file.path(s$output_dir, paste0(s$sample_id, "_S4_postBCR.rds"))
+  if (!file.exists(rds_in)) stop("Cannot find input RDS for ", s$sample_id, " -- run Step 4 first.")
+  obj <- readRDS(rds_in)
+  DefaultAssay(obj) <- "RNA"
+  message("  Loaded: ", ncol(obj), " cells | ", nrow(obj), " genes")
+
+  # Normalize
+  obj <- NormalizeData(obj, normalization.method = "LogNormalize",
+                       scale.factor = 10000, verbose = FALSE)
+
+  # Find HVGs and exclude IG/TCR variable genes
+  obj <- FindVariableFeatures(obj, selection.method = "vst",
+                              nfeatures = 2000, verbose = FALSE)
+  genes_to_exclude <- grep(variable_gene_regex, rownames(obj), value = TRUE)
+  n_excluded       <- length(intersect(genes_to_exclude, VariableFeatures(obj)))
+  message("  Excluding ", n_excluded, " IG/TCR variable genes from HVG list")
+  hvg_filtered <- setdiff(VariableFeatures(obj), genes_to_exclude)
+  if (length(hvg_filtered) < 50) {
+    warning("  Fewer than 50 HVGs remain after filtering. Using unfiltered list.")
+    hvg_filtered <- VariableFeatures(obj)
+  }
+  VariableFeatures(obj) <- hvg_filtered
+  message("  HVGs after filtering: ", length(hvg_filtered))
+
+  # Scale and PCA
+  obj <- ScaleData(obj, features = hvg_filtered, verbose = FALSE)
+  obj <- RunPCA(obj, features = hvg_filtered, npcs = 25, verbose = FALSE)
+
+  eigs    <- obj@reductions$pca@stdev^2
+  cum_var <- cumsum(eigs) / sum(eigs)
+  n_pc    <- which(cum_var >= var_expl)[1]
+  if (is.na(n_pc)) n_pc <- 25
+  n_pc    <- max(n_pc, 10); n_pc <- min(n_pc, 25)
+  message("  PCs selected: ", n_pc,
+          " (explains ", round(100 * cum_var[n_pc], 1), "% of variance)")
+
+  print(
+    ElbowPlot(obj, ndims = 25) +
+      ggtitle(paste0(s$sample_id, " -- Elbow plot")) +
+      geom_vline(xintercept = n_pc, linetype = "dashed", color = "red") +
+      labs(caption = paste0("Red dashed line = PC ", n_pc,
+                            " (", round(100 * cum_var[n_pc], 1), "% cumulative variance)"))
+  )
+
+  # Cluster and UMAP
+  obj <- FindNeighbors(obj, dims = 1:n_pc, verbose = FALSE)
+  obj <- FindClusters(obj, resolution = cluster_resolution, verbose = FALSE)
+  obj <- RunUMAP(obj, dims = 1:n_pc, verbose = FALSE)
+  message("  Clusters found: ", length(unique(obj$seurat_clusters)))
+
+  # Cell cycle scoring
+  obj <- CellCycleScoring(obj, s.features = s.genes,
+                          g2m.features = g2m.genes, set.ident = FALSE)
+  obj$Phase <- factor(obj$Phase, levels = c("G1", "S", "G2M"))
+
+  # Plots
+  num_clusters <- table(obj$seurat_clusters)
+  print(
+    DimPlot(obj, reduction = "umap", label = TRUE, repel = TRUE, pt.size = 1.2) +
+      scale_color_hue(labels = paste0(names(num_clusters), " (", num_clusters, ")")) +
+      ggtitle(paste0(s$sample_id, " -- Clusters (res = ", cluster_resolution, ")")) +
+      theme(legend.text = element_text(size = 9))
+  )
+
+  print(
+    FeaturePlot(obj, reduction = "umap",
+                features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+                order = TRUE, pt.size = 1.2) +
+      patchwork::plot_annotation(title = paste0(s$sample_id, " -- QC metrics on UMAP"))
+  )
+
+  markers_present <- intersect(b_cell_markers, rownames(obj))
+  print(
+    DotPlot(obj, features = markers_present, cols = c("gray90", "red"), dot.scale = 6) +
+      RotatedAxis() +
+      ggtitle(paste0(s$sample_id, " -- B cell marker panel")) +
+      theme(axis.text.x = element_text(size = 8))
+  )
+
+  markers_for_feature <- intersect(
+    c("CD79A", "IGHD", "IGHM", "CD27", "BCL6", "AICDA",
+      "MKI67", "PRDM1", "XBP1", "FCRL4", "FCRL5"),
+    rownames(obj)
+  )
+  if (length(markers_for_feature) > 0) {
+    print(
+      FeaturePlot(obj, reduction = "umap", features = markers_for_feature,
+                  order = TRUE, pt.size = 1.2) &
+        scale_color_gradientn(colors = viridis::inferno(256))
+    )
+  }
+
+  Idents(obj) <- "Phase"
+  print(
+    DimPlot(obj, reduction = "umap", label = FALSE, pt.size = 1.2,
+            cols = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
+      ggtitle(paste0(s$sample_id, " -- Cell cycle phase"))
+  )
+  Idents(obj) <- "seurat_clusters"
+
+  cc_df <- obj@meta.data %>%
+    dplyr::select(Phase, seurat_clusters) %>%
+    dplyr::group_by(seurat_clusters, Phase) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop_last") %>%
+    dplyr::mutate(pct = 100 * n / sum(n)) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(Phase = factor(Phase, levels = c("G1", "S", "G2M")))
+
+  print(
+    ggplot(cc_df, aes(x = seurat_clusters, y = pct, fill = Phase)) +
+      geom_bar(stat = "identity") +
+      scale_fill_manual(values = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
+      ylab("% of cells") + xlab("Cluster") +
+      theme_classic(base_size = 12) +
+      ggtitle(paste0(s$sample_id, " -- Cell cycle composition per cluster"))
+  )
+
+  # BCR overlay plots
+  if ("BCR" %in% colnames(obj@meta.data)) {
+
+    obj_bcr <- subset(obj, subset = !is.na(c_call) & c_call != "")
+    if (ncol(obj_bcr) > 0) {
+      obj_bcr$c_call <- factor(obj_bcr$c_call, levels = isotype_order)
+      present_iso    <- intersect(isotype_order, levels(droplevels(obj_bcr$c_call)))
+      print(
+        DimPlot(obj_bcr, group.by = "c_call", label = FALSE, pt.size = 1.2,
+                cols = isotype_colors[present_iso], order = rev(present_iso)) +
+          ggtitle(paste0(s$sample_id, " -- Isotype (BCR+ cells)"))
+      )
+    }
+
+    if ("mu_freq_H" %in% colnames(obj@meta.data)) {
+      print(
+        FeaturePlot(obj, features = "mu_freq_H", reduction = "umap",
+                    order = TRUE, pt.size = 1.2) +
+          scale_color_gradientn(colors = c("#FFFFCC", "#41B6C4", "#0C2C84"),
+                                na.value = "grey90") +
+          ggtitle(paste0(s$sample_id, " -- SHM frequency, heavy chain"))
+      )
+    }
+
+    if ("clone_count" %in% colnames(obj@meta.data)) {
+      print(
+        FeaturePlot(obj, features = "clone_count", reduction = "umap",
+                    order = TRUE, pt.size = 1.2) +
+          scale_color_gradientn(colors = c("#FFFFCC", "#FD8D3C", "#800026"),
+                                na.value = "grey90") +
+          ggtitle(paste0(s$sample_id, " -- Clone size"))
+      )
+    }
+
+    if ("c_call" %in% colnames(obj@meta.data)) {
+      iso_df <- obj@meta.data %>%
+        dplyr::filter(!is.na(c_call), c_call != "", !is.na(seurat_clusters)) %>%
+        dplyr::mutate(c_call          = factor(c_call, levels = isotype_order),
+                      seurat_clusters = as.factor(seurat_clusters))
+      present_iso2 <- intersect(isotype_order, levels(droplevels(iso_df$c_call)))
+      print(
+        ggplot(iso_df, aes(x = seurat_clusters, y = 1, fill = c_call)) +
+          geom_col(position = "fill") +
+          scale_y_continuous(labels = scales::label_percent(accuracy = 1)) +
+          scale_fill_manual(values = isotype_colors[present_iso2], breaks = present_iso2) +
+          ylab("Percentage of BCR+ cells") + xlab("Cluster") +
+          theme_classic(base_size = 12) +
+          ggtitle(paste0(s$sample_id, " -- Isotype composition per cluster"))
+      )
+    }
+  }
+
+  Idents(obj) <- "seurat_clusters"
+  rds_out <- file.path(s$output_dir, paste0(s$sample_id, "_S5_soloProcessed.rds"))
+  saveRDS(obj, file = rds_out)
+  message("  Saved: ", rds_out)
+
+  seurat_list[[s$sample_id]] <- obj
+}
+```
+
+## 5.5 Interpreting the P1_LN results
+
+P1_LN yields 2,292 B cells across 6 clusters. The memory B cell clusters
+(0, 1, 3, 4) together comprise roughly 74% of cells and are essentially
+indistinguishable on the DotPlot -- they share CD27 expression, mixed isotypes,
+and no enrichment for activation, GC, or proliferation markers. These cells are
+not cycling, not in a germinal center, and not receiving strong activation
+signals. Cluster 2 (20.8%) is naive B cells, cleanly marked by TCL1A, IGHM,
+IL4R, and IGHD. Cluster 5 is a small plasma cell population marked by JCHAIN,
+MZB1, and XBP1.
+
+**There is no germinal center cluster in P1_LN.** The lymph node is where
+germinal center reactions are supposed to occur, yet there is no BCL6/AICDA-
+enriched cluster here. This is a key finding of the paper: these tumor-draining
+lymph nodes are functionally compromised, with B cells that are resting rather
+than actively responding.
+
+The BCR data reinforces this. Mean clone size is 1.2 cells and the largest clone
+has only 6 cells -- essentially all singletons. SHM levels are moderate and
+distributed without clear spatial structure, consistent with a pre-existing
+polyclonal memory pool rather than ongoing affinity maturation.
+
+## 5.6 Interpreting the P1_PT results
+
+P1_PT yields 5,665 B cells across 11 clusters -- considerably more cells and
+transcriptional diversity than the LN. Cluster 1 (21.2%) is marked by FCRL4,
+FCRL5, and ITGAX -- atypical memory B cells (ABCs), which accumulate in settings
+of chronic antigen exposure including tumors. Clusters 2, 6, and 10 form the
+plasma cell compartment (JCHAIN, MZB1, XBP1). Clusters 4 and 8 are GC B cells
+(BCL6, AICDA, MEF2B). Cluster 5 (8.1%) is a clean proliferating cluster
+(MKI67, UBE2C, PCNA). Cluster 3 (11.2%) is interferon-stimulated (IFIT1/2/3,
+OASL) -- entirely absent from the LN.
+
+The BCR data for P1_PT is in a different league. Mean clone size is 27 cells
+and the largest clone has 151 cells. IgG1 dominates (66.4%) and SHM is elevated
+(mean 5.1%), the hallmark of antigen-selected, class-switched, somatically
+hypermutated B cells.
+
+The LN contains a polyclonal, resting memory B cell pool with no active GC
+response and no clonal expansion. The PT contains an oligoclonal,
+transcriptionally diverse infiltrate with active GC reactions, expanded plasma
+cell and atypical memory populations, a proliferating cluster, and large
+antigen-driven clones. This contrast is one of the central findings of the paper
+and is fully visible at this pre-integration stage.
+
+---
+
+# Step 6: Integration
+
+## 6.1 Why integration is necessary
+
+Without integration, technical variation between samples -- sequencing depth,
+capture efficiency, ambient RNA -- can drive UMAP separation that has nothing to
+do with biology. A naive merge of the two objects would almost certainly produce
+sample-specific clusters, making it impossible to distinguish a real biological
+difference (LN vs PT) from a technical artifact.
+
+We use RPCA (Reciprocal PCA) integration via Seurat v5's `IntegrateLayers()`.
+RPCA projects each dataset into the PCA space of the other, identifies mutual
+nearest neighbors as integration anchors, and corrects each sample's embedding
+toward a shared space. It is conservative: it corrects technical offsets while
+preserving real biological differences. It works best when samples share a
+meaningful proportion of cell types -- which is exactly the case here, since
+both samples contain memory and naive B cells.
+
+## 6.2 Choosing an integration method
+
+Three methods are available in Seurat v5:
+
+**RPCA** (used here): conservative, fast, best for same-platform same-experiment
+data with shared cell types.
+
+**CCA**: more aggressive, can overcorrect similar samples but handles very
+different conditions better. To switch: change `method = RPCAIntegration` to
+`method = CCAIntegration` and update `new.reduction` accordingly.
+
+**Harmony**: operates on PCA embeddings directly, scales well to many samples
+(>10) and large datasets (>50k cells). To use: change `method = RPCAIntegration`
+to `method = HarmonyIntegration` and install the `harmony` package.
+
+Integration does not modify the count matrix. The `RNA` assay is always
+unchanged. All downstream analysis -- differential expression, feature plots --
+should use the `RNA` assay.
+
+## 6.3 Load, merge, and prepare layers
+
+```{r load-and-merge}
+seurat_list_s5 <- list()
+for (s in samples) {
+  rds_in <- file.path(s$output_dir, paste0(s$sample_id, "_S5_soloProcessed.rds"))
+  if (!file.exists(rds_in)) stop("Cannot find RDS for ", s$sample_id, " -- run Step 5 first.")
+  obj <- readRDS(rds_in)
+  obj$sample_id <- s$sample_id
+  seurat_list_s5[[s$sample_id]] <- obj
+  message("Loaded: ", s$sample_id, " -- ", ncol(obj), " cells | ", nrow(obj), " genes")
+}
+
+merged <- merge(x = seurat_list_s5[[1]], y = seurat_list_s5[-1])
+message("Merged object: ", ncol(merged), " cells | ", nrow(merged), " genes")
+```
+
+```{r split-layers}
+DefaultAssay(merged) <- "RNA"
+merged[["RNA"]] <- JoinLayers(merged[["RNA"]])
+merged[["RNA"]] <- split(merged[["RNA"]], f = merged$sample_id)
+message("Layers after split: ", paste(Layers(merged), collapse = ", "))
+```
+
+## 6.4 Normalize, find HVGs, scale, PCA (unintegrated)
+
+We re-normalize on the merged object because `merge()` in Seurat v5 combines raw
+count layers but does not carry over the normalized data layer. The same IG/TCR
+variable gene exclusion from Step 5 is applied here.
+
+```{r normalize-hvg-integrated}
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",
+                        scale.factor = 10000, verbose = FALSE)
+merged <- FindVariableFeatures(merged, selection.method = "vst",
+                               nfeatures = 2000, verbose = FALSE)
+
+genes_to_exclude_m <- grep(variable_gene_regex, rownames(merged), value = TRUE)
+n_excluded_m       <- length(intersect(genes_to_exclude_m, VariableFeatures(merged)))
+hvg_filtered_m     <- setdiff(VariableFeatures(merged), genes_to_exclude_m)
+message("IG/TCR variable genes excluded: ", n_excluded_m)
+message("HVGs after filtering: ", length(hvg_filtered_m))
+VariableFeatures(merged) <- hvg_filtered_m
+
+merged <- ScaleData(merged, features = hvg_filtered_m, verbose = FALSE)
+merged <- RunPCA(merged, features = hvg_filtered_m, npcs = 25, verbose = FALSE)
+
+eigs_m    <- merged@reductions$pca@stdev^2
+cum_var_m <- cumsum(eigs_m) / sum(eigs_m)
+n_pc_m    <- which(cum_var_m >= 0.8)[1]
+if (is.na(n_pc_m)) n_pc_m <- 25
+n_pc_m    <- max(n_pc_m, 10); n_pc_m <- min(n_pc_m, 25)
+message("PCs selected: ", n_pc_m,
+        " (explains ", round(100 * cum_var_m[n_pc_m], 1), "% of variance)")
+
+print(
+  ElbowPlot(merged, ndims = 25) +
+    ggtitle("Elbow plot -- merged unintegrated") +
+    geom_vline(xintercept = n_pc_m, linetype = "dashed", color = "red") +
+    labs(caption = paste0("Red dashed line = PC ", n_pc_m,
+                          " (", round(100 * cum_var_m[n_pc_m], 1), "% cumulative variance)"))
+)
+```
+
+## 6.5 Pre-integration UMAP
+
+This UMAP is run on the unintegrated PCA solely to show the batch effect before
+correction. It is stored as `umap.unintegrated` and is not used in any downstream
+analysis.
+
+```{r umap-unintegrated}
+merged <- RunUMAP(merged, dims = 1:n_pc_m, reduction = "pca",
+                  reduction.name = "umap.unintegrated", verbose = FALSE)
+
+print(
+  DimPlot(merged, reduction = "umap.unintegrated", group.by = "sample_id",
+          pt.size = 0.8) +
+    ggtitle("UMAP -- Unintegrated (colored by sample)") +
+    theme(plot.title = element_text(hjust = 0.5))
+)
+```
+
+If the two samples form largely separate clouds, that confirms a batch component
+to correct. If they already overlap almost completely, integration will have
+little effect but is still worth running.
+
+## 6.6 RPCA integration
+
+```{r integrate}
+options(future.globals.maxSize = 2000 * 1024^2)
+
+merged <- IntegrateLayers(
+  object         = merged,
+  method         = RPCAIntegration,
+  orig.reduction = "pca",
+  new.reduction  = "integrated.rpca",
+  verbose        = FALSE
+)
+
+merged[["RNA"]] <- JoinLayers(merged[["RNA"]])
+message("Integration complete. Layers rejoined.")
+```
+
+## 6.7 Cluster and UMAP on integrated embedding
+
+Resolution 0.5 produces 11 clusters that map cleanly onto recognizable B cell
+states for this dataset. If your clusters look heterogeneous on the DotPlot,
+try 0.7 or 1.0. If many clusters look identical, try 0.3 or 0.4.
+
+```{r cluster-umap-integrated}
+merged <- FindNeighbors(merged, dims = 1:n_pc_m,
+                        reduction = "integrated.rpca", verbose = FALSE)
+merged <- FindClusters(merged, resolution = 0.5, verbose = FALSE)
+merged <- RunUMAP(merged, dims = 1:n_pc_m,
+                  reduction = "integrated.rpca", verbose = FALSE)
+message("Clusters found: ", length(unique(merged$seurat_clusters)))
+```
+
+## 6.8 Evaluating integration
+
+```{r umap-post-integration}
+print(
+  DimPlot(merged, reduction = "umap", group.by = "sample_id", pt.size = 0.8) +
+    ggtitle("UMAP -- Integrated (colored by sample)") +
+    theme(plot.title = element_text(hjust = 0.5))
+)
+
+num_clusters_m <- table(merged$seurat_clusters)
+print(
+  DimPlot(merged, reduction = "umap", label = TRUE, repel = TRUE, pt.size = 0.8) +
+    scale_color_hue(labels = paste0(names(num_clusters_m), " (", num_clusters_m, ")")) +
+    ggtitle("UMAP -- Integrated clusters (res = 0.5)") +
+    theme(legend.text = element_text(size = 9))
+)
+```
+
+After successful RPCA integration, cells from P1_LN and P1_PT should intermingle
+within shared clusters rather than forming two separate islands. Genuine
+biological differences between LN and PT will remain visible as differences in
+cluster proportions, not wholesale spatial separation.
+
+## 6.9 Cluster composition by sample
+
+```{r cluster-composition}
+comp_df <- merged@meta.data %>%
+  dplyr::select(seurat_clusters, sample_id) %>%
+  dplyr::group_by(seurat_clusters, sample_id) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop_last") %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup()
+
+print(
+  ggplot(comp_df, aes(x = seurat_clusters, y = pct, fill = sample_id)) +
+    geom_bar(stat = "identity") +
+    ylab("% of cells") + xlab("Cluster") +
+    theme_classic(base_size = 12) +
+    ggtitle("Cluster composition by sample")
+)
+```
+
+## 6.10 Save integrated object
+
+```{r save-integrated}
+rds_out_s6 <- file.path(RDS_DIR, "integrated_S6.rds")
+saveRDS(merged, file = rds_out_s6)
+message("Saved: ", rds_out_s6)
+message("Cells: ", ncol(merged), " | Clusters: ", length(unique(merged$seurat_clusters)))
+```
+
+---
+
+# Step 7: Cluster Annotation
+
+## 7.1 Load the integrated object
+
+```{r load-step7}
+rds_in_s7 <- file.path(RDS_DIR, "integrated_S6.rds")
+if (!file.exists(rds_in_s7)) stop("Cannot find integrated RDS -- run Step 6 first.")
+
+obj <- readRDS(rds_in_s7)
+DefaultAssay(obj) <- "RNA"
+Idents(obj) <- "seurat_clusters"
+
+num_clusters_s7 <- table(obj$seurat_clusters)
+message("Loaded: ", ncol(obj), " cells | ", length(num_clusters_s7), " clusters")
+```
+
+## 7.2 Cell cycle scoring
+
+Cell cycle phase was computed in Step 5 on the per-sample objects. We check
+whether it carried through the merge; if not, we score it here.
+
+```{r cell-cycle-step7}
+if (!"Phase" %in% colnames(obj@meta.data)) {
+  message("Phase column not found -- scoring cell cycle on integrated object...")
+  obj <- CellCycleScoring(obj, s.features = s.genes,
+                          g2m.features = g2m.genes, set.ident = FALSE)
+  message("Cell cycle scoring complete.")
+} else {
+  message("Phase column already present -- skipping scoring.")
+}
+obj$Phase <- factor(obj$Phase, levels = c("G1", "S", "G2M"))
+Idents(obj) <- "seurat_clusters"
+```
+
+## 7.3 UMAP by cluster and by sample
+
+```{r umap-cluster-sample-step7}
+print(
+  DimPlot(obj, reduction = "umap", label = TRUE, label.size = 5, repel = TRUE) +
+    scale_color_hue(labels = paste0(names(num_clusters_s7), "  (n=", num_clusters_s7, ")")) +
+    ggtitle("Integrated UMAP -- Clusters") +
+    theme(plot.title  = element_text(hjust = 0.5),
+          legend.text = element_text(size = 9))
+)
+
+print(
+  DimPlot(obj, reduction = "umap", group.by = "sample_id",
+          label = FALSE, pt.size = 0.8) +
+    ggtitle("Integrated UMAP -- Sample") +
+    theme(plot.title = element_text(hjust = 0.5))
+)
+```
+
+## 7.4 B cell marker DotPlot
+
+The DotPlot is the primary annotation tool. Read it row by row and look for the
+marker group that lights up. Pay attention to both dot size (percent expressing)
+and color (average expression level). This is the first pass -- several clusters
+will be immediately classifiable, while others will need additional evidence from
+BCR metadata and DEG analysis.
+
+Some clusters stand out immediately: cluster 5 has the clearest signal in the
+dataset with TCL1A, IGHD, IGHM, and IL4R pointing unambiguously to naive B cells.
+Clusters 3 and 9 both show strong JCHAIN, MZB1, and XBP1 -- plasma cell markers.
+Clusters 4 and 6 express BCL6, MEF2B, and AICDA. Clusters 0, 1, 2, and 7 all
+show a memory B cell presence -- CD27-positive, no GC or naive markers. Clusters
+0 and 1 look very similar with no obvious distinguishing markers between them.
+Cluster 2 lights up on FCRL4, FCRL5, and interferon-stimulated genes. Cluster 7
+shows elevated CD83.
+
+```{r dotplot-step7}
+markers_present_s7 <- intersect(b_cell_markers, rownames(obj))
+print(
+  DotPlot(obj, features = markers_present_s7,
+          cols = c("gray90", "red"), dot.scale = 6) +
+    RotatedAxis() +
+    ggtitle("B cell marker panel -- integrated clusters") +
+    theme(axis.text.x = element_text(size = 8))
+)
+```
+
+## 7.5 Sample composition per cluster
+
+```{r sample-composition-step7}
+sample_df_s7 <- obj@meta.data %>%
+  dplyr::select(sample_id, seurat_clusters) %>%
+  dplyr::group_by(seurat_clusters, sample_id) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop_last") %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup()
+
+print(
+  ggplot(sample_df_s7, aes(x = seurat_clusters, y = pct, fill = sample_id)) +
+    geom_bar(stat = "identity") +
+    scale_y_continuous(labels = scales::label_percent(scale = 1, accuracy = 1)) +
+    ylab("% of cluster") + xlab("Cluster") +
+    theme_classic(base_size = 12) +
+    ggtitle("Sample composition per cluster")
+)
+```
+
+Clusters 0 and 1 are substantially mixed between LN and PT, consistent with
+quiescent memory B cell populations found in both tissues. Cluster 5 is
+predominantly LN-derived, as expected for naive B cells. Cluster 7 has a
+partial LN contribution (~25%). All remaining clusters are predominantly or
+exclusively PT-derived.
+
+## 7.6 FeaturePlots: key marker genes on UMAP
+
+```{r featureplots-step7}
+markers_for_feature_s7 <- intersect(
+  c("CD79A", "IGHD", "IGHM", "CD27", "BCL6", "AICDA",
+    "MKI67", "PRDM1", "XBP1", "FCRL4", "FCRL5"),
+  rownames(obj)
+)
+if (length(markers_for_feature_s7) > 0) {
+  print(
+    FeaturePlot(obj, reduction = "umap", features = markers_for_feature_s7,
+                order = TRUE, pt.size = 0.8) &
+      scale_color_gradientn(colors = viridis::inferno(256))
+  )
+}
+```
+
+## 7.7 Isotype composition per cluster
+
+Isotype composition adds a BCR-level layer of evidence that transcriptomics
+alone cannot provide. Two clusters that both express CD27 can be distinguished
+if one is IgM-dominant (unswitched) and the other is IgG-dominant (class-switched).
+
+Cluster 5 is predominantly IgM-dominant, consistent with its naive identity.
+Clusters 1 and 2 show mixed isotype composition. The remaining clusters are
+predominantly IgG1-dominant and are also largely PT-derived, highlighting a
+tissue-level difference: the LN is enriched for IgM and mixed isotype
+populations, while the PT is dominated by class-switched IgG.
+
+```{r isotype-step7}
+if ("c_call" %in% colnames(obj@meta.data)) {
+
+  obj_bcr_s7 <- subset(obj, subset = !is.na(c_call) & c_call != "")
+  if (ncol(obj_bcr_s7) > 0) {
+    obj_bcr_s7$c_call <- factor(obj_bcr_s7$c_call, levels = isotype_order)
+    present_iso_s7    <- intersect(isotype_order, levels(droplevels(obj_bcr_s7$c_call)))
+    print(
+      DimPlot(obj_bcr_s7, group.by = "c_call", label = FALSE, pt.size = 0.8,
+              cols = isotype_colors[present_iso_s7], order = rev(present_iso_s7),
+              reduction = "umap") +
+        ggtitle("Integrated UMAP -- Isotype (BCR+ cells)")
+    )
+  }
+
+  iso_df_s7 <- obj@meta.data %>%
+    dplyr::filter(!is.na(c_call), c_call != "", !is.na(seurat_clusters)) %>%
+    dplyr::mutate(c_call          = factor(c_call, levels = isotype_order),
+                  seurat_clusters = as.factor(seurat_clusters))
+  present_iso_s7b <- intersect(isotype_order, levels(droplevels(iso_df_s7$c_call)))
+  print(
+    ggplot(iso_df_s7, aes(x = seurat_clusters, y = 1, fill = c_call)) +
+      geom_col(position = "fill") +
+      scale_y_continuous(labels = scales::label_percent(accuracy = 1)) +
+      scale_fill_manual(values = isotype_colors[present_iso_s7b],
+                        breaks = present_iso_s7b) +
+      ylab("Percentage of BCR+ cells") + xlab("Cluster") +
+      theme_classic(base_size = 12) +
+      ggtitle("Isotype composition per cluster")
+  )
+}
+```
+
+## 7.8 SHM frequency and clonality per cluster
+
+SHM frequency adds a further layer of evidence. Cluster 5 is clearly the lowest
+in the dataset with a near-zero median, consistent with its naive identity.
+Cluster 2 is notably lower than the other memory clusters (median ~0.03 vs
+~0.05-0.06 for clusters 0 and 1). Clusters 0, 1, 3, 4, 6, 7, 8, and 9 are
+broadly similar in the ~0.05-0.06 range. Cluster 10 appears elevated but has
+only 32 cells, making the estimate unreliable.
+
+```{r shm-step7}
+if ("mu_freq_H" %in% colnames(obj@meta.data)) {
+  print(
+    FeaturePlot(obj, features = "mu_freq_H", reduction = "umap",
+                order = TRUE, pt.size = 0.8) +
+      scale_color_gradientn(colors = c("#FFFFCC", "#41B6C4", "#0C2C84"),
+                            na.value = "grey90") +
+      ggtitle("Integrated UMAP -- SHM frequency, heavy chain")
+  )
+
+  shm_df_s7 <- obj@meta.data %>%
+    dplyr::filter(!is.na(mu_freq_H)) %>%
+    dplyr::mutate(seurat_clusters = as.factor(seurat_clusters))
+  print(
+    ggplot(shm_df_s7, aes(x = seurat_clusters, y = mu_freq_H)) +
+      geom_boxplot(outlier.size = 0.5, fill = "steelblue", alpha = 0.6) +
+      ylab("SHM frequency (heavy chain)") + xlab("Cluster") +
+      theme_classic(base_size = 12) +
+      ggtitle("SHM frequency per cluster")
+  )
+
+  print(
+    FeaturePlot(obj, features = "clone_count", reduction = "umap",
+                order = TRUE, pt.size = 0.8) +
+      scale_color_gradientn(colors = c("#FFFFCC", "#FD8D3C", "#800026"),
+                            na.value = "grey90") +
+      ggtitle("Integrated UMAP -- Clone size")
+  )
+}
+```
+
+## 7.9 Clonality per cluster
+
+Cluster 3 stands out as the most clonal in the dataset with a mean clone size
+of ~3.8. Clusters 0, 1, 5, and 7 show near-zero clonality. Cluster 2 shows
+moderate clonality (mean clone size ~2.0).
+
+```{r clonality-step7}
+if ("clone_id" %in% colnames(obj@meta.data)) {
+
+  clone_df_s7 <- obj@meta.data %>%
+    dplyr::filter(!is.na(clone_id), !is.na(seurat_clusters)) %>%
+    dplyr::group_by(seurat_clusters) %>%
+    dplyr::summarise(
+      n_cells         = dplyr::n(),
+      n_clones        = dplyr::n_distinct(clone_id),
+      clonality       = 1 - (n_clones / n_cells),
+      mean_clone_size = n_cells / n_clones,
+      max_clone_size  = max(table(clone_id)),
+      pct_expanded    = 100 * mean(table(clone_id)[clone_id] > 1),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(as.numeric(as.character(seurat_clusters)))
+
+  print(knitr::kable(clone_df_s7, digits = 2, caption = "Clonality per cluster"))
+
+  print(
+    ggplot(clone_df_s7, aes(x = as.factor(seurat_clusters), y = mean_clone_size)) +
+      geom_bar(stat = "identity", fill = "darkorange", alpha = 0.8) +
+      ylab("Mean clone size") + xlab("Cluster") +
+      theme_classic(base_size = 12) +
+      ggtitle("Mean clone size per cluster")
+  )
+}
+```
+
+## 7.10 Cell cycle per cluster
+
+Clusters 6 and 8 are the clear proliferating populations: cluster 6 shows
+near-100% S and G2M phase, and cluster 8 shows ~55% S and G2M.
+
+```{r cell-cycle-plot-step7}
+Idents(obj) <- "Phase"
+print(
+  DimPlot(obj, reduction = "umap", label = FALSE, pt.size = 0.8,
+          cols = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
+    ggtitle("Integrated UMAP -- Cell cycle phase")
+)
+Idents(obj) <- "seurat_clusters"
+
+cc_df_s7 <- obj@meta.data %>%
+  dplyr::select(Phase, seurat_clusters) %>%
+  dplyr::group_by(seurat_clusters, Phase) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop_last") %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Phase = factor(Phase, levels = c("G1", "S", "G2M")))
+
+print(
+  ggplot(cc_df_s7, aes(x = seurat_clusters, y = pct, fill = Phase)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
+    ylab("% of cells") + xlab("Cluster") +
+    theme_classic(base_size = 12) +
+    ggtitle("Cell cycle composition per cluster")
+)
+```
+
+## 7.11 DEG heatmap: top 5 markers per cluster
+
+The heatmap runs `FindAllMarkers()` and plots the top 5 upregulated genes per
+cluster as a z-scored average expression heatmap. This gives an unbiased initial
+view of what distinguishes each cluster and provides hints that the pairwise DEG
+analysis in the following sections will confirm or refine.
+
+Several clusters show interpretable signals: cluster 2 lights up on OASL, IFIT1,
+FCRL4, and USP18. Cluster 3 shows immunoglobulin heavy and light chain V gene
+transcripts alongside SDC1 and GAS6. Cluster 4 shows SERPINA9 and MEF2B. Cluster
+6 is dominated by mitotic genes. Cluster 7 shows NR4A1, NR4A2, EGR2, and EGR1.
+Cluster 8 shows S-phase histone genes. Cluster 9 shows NKX6-3. Clusters 0 and 1
+show weak signals from this view alone and are resolved in section 7.12.
+
+For faster computation, install the `presto` package -- Seurat will use it
+automatically:
+
+```r
+install.packages("devtools")
+devtools::install_github("immunogenomics/presto")
+```
+
+```{r deg-heatmap}
+all_markers <- FindAllMarkers(
+  obj, only.pos = TRUE, min.pct = 0.25,
+  logfc.threshold = 0.25, verbose = FALSE
+)
+
+top5 <- all_markers %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::slice_max(order_by = avg_log2FC, n = 5) %>%
+  dplyr::ungroup()
+
+message("FindAllMarkers complete. Total DEGs: ", nrow(all_markers))
+
+if (nrow(top5) > 0) {
+  genes_to_plot_hm <- unique(as.character(top5$gene))
+  genes_to_plot_hm <- intersect(genes_to_plot_hm, rownames(obj))
+
+  avg_expr <- AverageExpression(
+    obj, features = genes_to_plot_hm, group.by = "seurat_clusters",
+    assays = "RNA", layer = "data", verbose = FALSE
+  )$RNA
+
+  avg_scaled <- t(scale(t(avg_expr)))
+  avg_scaled[!is.finite(avg_scaled)] <- 0
+  rownames(avg_scaled) <- rownames(avg_expr)
+  colnames(avg_scaled) <- colnames(avg_expr)
+
+  gene_order_hm    <- unique(as.character(top5$gene)[as.character(top5$gene) %in% rownames(avg_scaled)])
+  cluster_order_hm <- colnames(avg_scaled)[order(as.numeric(gsub("^g", "", colnames(avg_scaled))))]
+  avg_scaled       <- avg_scaled[gene_order_hm, cluster_order_hm, drop = FALSE]
+
+  pheatmap::pheatmap(
+    avg_scaled, cluster_rows = FALSE, cluster_cols = FALSE,
+    color        = colorRampPalette(c("dodgerblue", "white", "firebrick"))(100),
+    fontsize_row = 7, fontsize_col = 9, angle_col = 0,
+    main         = "Top 5 DEGs per cluster (z-scored average expression)",
+    border_color = NA
+  )
+}
+```
+
+## 7.12 Pairwise DEGs: resolving clusters 0, 1, and 2
+
+Clusters 0 and 1 cannot be distinguished from the DotPlot or heatmap alone --
+both show a memory B cell profile. We run each against the other two combined.
+Cluster 2 is included as a reference point.
+
+```{r deg-cluster-0-1-2}
+deg_0_vs_1_2 <- FindMarkers(obj, ident.1 = 0, ident.2 = c(1, 2),
+                             min.pct = 0.25, logfc.threshold = 0.1,
+                             only.pos = FALSE, verbose = FALSE)
+deg_1_vs_0_2 <- FindMarkers(obj, ident.1 = 1, ident.2 = c(0, 2),
+                             min.pct = 0.25, logfc.threshold = 0.1,
+                             only.pos = FALSE, verbose = FALSE)
+deg_2_vs_0_1 <- FindMarkers(obj, ident.1 = 2, ident.2 = c(0, 1),
+                             min.pct = 0.25, logfc.threshold = 0.1,
+                             only.pos = FALSE, verbose = FALSE)
+
+for (res in list(list(deg_0_vs_1_2, "Cluster 0 vs 1+2"),
+                 list(deg_1_vs_0_2, "Cluster 1 vs 0+2"),
+                 list(deg_2_vs_0_1, "Cluster 2 vs 0+1"))) {
+  df      <- res[[1]]
+  label   <- res[[2]]
+  df$gene <- rownames(df)
+  df      <- df %>% dplyr::arrange(desc(avg_log2FC))
+  message("\nTop 30 higher in ", label, ":")
+  print(knitr::kable(
+    head(df[, c("gene", "avg_log2FC", "pct.1", "pct.2", "p_val_adj")], 30),
+    digits = 4, caption = paste("Top 30 DEGs --", label)
+  ))
+}
+```
+
+**Cluster 0** lacks strong functional identity markers. The top DEGs are
+ribosomal protein genes, translation factors, and lncRNAs with modest fold
+changes and small differences in percent expressing. Combined with near-zero
+clonality and mixed isotype composition, we label this cluster **MBC**.
+
+**Cluster 1** shows CR1, CR2, NOTCH2, BACH2, EBF1, AKT3, FOXP1, and KLF12 as
+its top specific markers. We name this cluster **MBC_CR2pos**.
+
+**Cluster 2** has the clearest pairwise signal: OASL, USP18, FCRL4, IFIT1,
+ISG15, DUSP4, RSAD2, CCR1, IFIT3, and ITGAX, all with high fold changes (2.5-4.0).
+We call this cluster **MBC_Atypical**.
+
+## 7.13 Pairwise DEGs: confirming PC and GC identities
+
+The PC and GC clusters already have provisional identities from the DotPlot --
+this step confirms and locks them in.
+
+```{r deg-pc-gc}
+deg_3_vs_689 <- FindMarkers(obj, ident.1 = 3, ident.2 = c(6, 8, 9),
+                             min.pct = 0.20, logfc.threshold = 0.1,
+                             only.pos = TRUE, verbose = FALSE)
+deg_6_vs_389 <- FindMarkers(obj, ident.1 = 6, ident.2 = c(3, 8, 9),
+                             min.pct = 0.20, logfc.threshold = 0.1,
+                             only.pos = TRUE, verbose = FALSE)
+deg_8_vs_369 <- FindMarkers(obj, ident.1 = 8, ident.2 = c(3, 6, 9),
+                             min.pct = 0.20, logfc.threshold = 0.1,
+                             only.pos = TRUE, verbose = FALSE)
+deg_9_vs_368 <- FindMarkers(obj, ident.1 = 9, ident.2 = c(3, 6, 8),
+                             min.pct = 0.20, logfc.threshold = 0.1,
+                             only.pos = TRUE, verbose = FALSE)
+
+for (res in list(list(deg_3_vs_689, "Cluster 3 vs 6+8+9"),
+                 list(deg_6_vs_389, "Cluster 6 vs 3+8+9"),
+                 list(deg_8_vs_369, "Cluster 8 vs 3+6+9"),
+                 list(deg_9_vs_368, "Cluster 9 vs 3+6+8"))) {
+  df      <- res[[1]]
+  label   <- res[[2]]
+  df$gene <- rownames(df)
+  df      <- df %>% dplyr::arrange(desc(avg_log2FC))
+  message("\nTop 30 higher in ", label, ":")
+  print(knitr::kable(
+    head(df[, c("gene", "avg_log2FC", "pct.1", "pct.2", "p_val_adj")], 30),
+    digits = 4, caption = paste("Top 30 DEGs --", label)
+  ))
+}
+```
+
+**Cluster 3** is distinguished by immunoglobulin heavy and light chain expression
+alongside GAS6, SPAG4, FNDC3B, ITM2C, and PECAM1. This is the main PC population.
+
+**Cluster 6** is dominated by mitotic genes (KIF18B, KIFC1, CCNB2, CDCA7, MYBL1)
+with very high fold changes, alongside BACH2 and SERPINA9 placing these cells in
+a GC context. Combined with near-100% S+G2M composition, this is the cycling GC
+B cell population: **GC_Cycling**.
+
+**Cluster 8** shows S-phase histone genes alongside FCRL4, GBP1, IFI44L, USP18,
+and TNFRSF1B. The combination of proliferation markers with FCRL4 and IFN genes
+links this cluster to MBC_Atypical -- cycling atypical memory B cells:
+**MBC_Cycling**.
+
+**Cluster 9** shows NKX6-3, CYS1, RASSF6, VDR, CD9, and DENND6B, confirming a
+PC identity distinct from cluster 3: **PC_2**.
+
+## 7.14 Optional: additional DEG comparisons
+
+Set `deg_mode` to run further comparisons. Left as NULL to skip by default.
+
+```{r deg-finder}
+# ---- USER SETTINGS -----------------------------------------------------------
+deg_mode     <- NULL   # "one_vs_rest" or "one_vs_one" -- leave NULL to skip
+cluster_A    <- 0
+cluster_B    <- 1      # one_vs_one only; can be a vector e.g. c(1, 2)
+deg_min_pct  <- 0.25
+deg_logfc    <- 0.25
+deg_only_pos <- TRUE
+deg_top_n    <- 20
+deg_save_dir <- RDS_DIR
+# ------------------------------------------------------------------------------
+
+if (is.null(deg_mode)) {
+
+  message("deg_mode is NULL -- skipping. Set deg_mode to run a comparison.")
+
+} else {
+
+  if (!dir.exists(deg_save_dir)) dir.create(deg_save_dir, recursive = TRUE)
+  Idents(obj) <- "seurat_clusters"
+
+  if (deg_mode == "one_vs_rest") {
+
+    deg_result       <- FindMarkers(obj, ident.1 = cluster_A, min.pct = deg_min_pct,
+                                    logfc.threshold = deg_logfc, only.pos = deg_only_pos,
+                                    verbose = FALSE)
+    deg_result$gene  <- rownames(deg_result)
+    deg_result       <- deg_result %>% dplyr::arrange(desc(avg_log2FC))
+    print(knitr::kable(
+      head(deg_result[, c("gene", "avg_log2FC", "pct.1", "pct.2", "p_val_adj")], deg_top_n),
+      digits = 4
+    ))
+    write.table(deg_result, file = file.path(deg_save_dir,
+      paste0("DEGs_cluster", cluster_A, "_vs_rest.tsv")),
+      sep = "\t", quote = FALSE, row.names = FALSE)
+
+  } else if (deg_mode == "one_vs_one") {
+
+    deg_result            <- FindMarkers(obj, ident.1 = cluster_A, ident.2 = cluster_B,
+                                         min.pct = deg_min_pct, logfc.threshold = deg_logfc,
+                                         only.pos = deg_only_pos, verbose = FALSE)
+    deg_result$gene       <- rownames(deg_result)
+    deg_result$cluster    <- cluster_A
+    deg_result$comparison <- paste0("cluster", cluster_A, "_vs_cluster",
+                                    paste(cluster_B, collapse = "_"))
+    deg_result            <- deg_result %>% dplyr::arrange(desc(avg_log2FC))
+    print(knitr::kable(
+      head(deg_result[, c("gene", "avg_log2FC", "pct.1", "pct.2", "p_val_adj")], deg_top_n),
+      digits = 4
+    ))
+    write.table(deg_result, file = file.path(deg_save_dir,
+      paste0("DEGs_cluster", cluster_A, "_vs_cluster",
+             paste(cluster_B, collapse = "_"), ".tsv")),
+      sep = "\t", quote = FALSE, row.names = FALSE)
+
+  } else {
+    stop("Unknown deg_mode: '", deg_mode, "'. Choose from: one_vs_rest, one_vs_one")
+  }
+}
+```
+
+## 7.15 Annotation decisions
+
+After reviewing all plots and DEGs, the final annotation table is:
+
+| Cluster | n | Label | Key evidence |
+|---------|---|-------|-------------|
+| 0 | 1,793 | MBC | Near-zero clonality, mixed isotype, no specific identity markers |
+| 1 | 1,507 | MBC_CR2pos | CR1, CR2, NOTCH2, BACH2, EBF1, AKT3 specific vs clusters 0 and 2 |
+| 2 | 1,222 | MBC_Atypical | FCRL4, ITGAX, strong IFN program (OASL, USP18, ISG15, IFITs, DUSP4) |
+| 3 | 872 | PC | IGHG1/2/3/4, IGKC, GAS6, SPAG4, FNDC3B, ITM2C, PECAM1 |
+| 4 | 663 | GC | BCL6, MEF2B, SERPINA9 -- non-proliferating GC B cells |
+| 5 | 653 | Naive | TCL1A, IGHD, IGHM, IL4R; near-zero clonality; LN-enriched |
+| 6 | 504 | GC_Cycling | Pure mitotic program (KIF18B, KIFC1, CCNB2); near-100% S+G2M; PT-only |
+| 7 | 406 | MBC_NR4A | NR4A1, NR4A2, EGR1, EGR2, CD69; partial LN contribution |
+| 8 | 209 | MBC_Cycling | HIST1H3H/1E, FCRL4, GBP1, IFI44L, USP18 -- cycling atypical MBCs |
+| 9 | 96 | PC_2 | NKX6-3, CYS1, RASSF6, VDR, CD9; PT-only; second PC population |
+| 10 | 32 | Unsure | No interpretable signature at 32 cells; PT-only |
+
+```{r cluster-annotations}
+# ---- USER SETTINGS -----------------------------------------------------------
+cluster_annotations <- c(
+  "0"  = "MBC",
+  "1"  = "MBC_CR2pos",
+  "2"  = "MBC_Atypical",
+  "3"  = "PC",
+  "4"  = "GC",
+  "5"  = "Naive",
+  "6"  = "GC_Cycling",
+  "7"  = "MBC_NR4A",
+  "8"  = "MBC_Cycling",
+  "9"  = "PC_2",
+  "10" = "Unsure"
+)
+# ------------------------------------------------------------------------------
+```
+
+## 7.16 Apply annotations and validate
+
+```{r apply-annotations}
+clusters_in_obj  <- as.character(sort(unique(obj$seurat_clusters)))
+clusters_defined <- names(cluster_annotations)
+missing_clusters <- setdiff(clusters_in_obj, clusters_defined)
+extra_clusters   <- setdiff(clusters_defined, clusters_in_obj)
+
+if (length(missing_clusters) > 0) {
+  warning("The following clusters have no annotation: ",
+          paste(missing_clusters, collapse = ", "),
+          "\nThese cells will be labeled 'Unlabeled'.")
+}
+if (length(extra_clusters) > 0) {
+  message("Note: annotation includes cluster(s) not in object: ",
+          paste(extra_clusters, collapse = ", "), " -- ignored.")
+}
+
+full_annotation_map               <- cluster_annotations
+full_annotation_map[missing_clusters] <- "Unlabeled"
+obj$cell_type <- unname(full_annotation_map[as.character(obj$seurat_clusters)])
+
+annotation_summary <- obj@meta.data %>%
+  dplyr::group_by(seurat_clusters, cell_type) %>%
+  dplyr::summarise(n_cells = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(as.numeric(as.character(seurat_clusters)))
+
+message("Annotation summary:")
+print(knitr::kable(annotation_summary))
+```
+
+## 7.17 Annotated UMAPs
+
+```{r annotated-umaps}
+annotation_summary$label <- paste0(
+  annotation_summary$cell_type, "\n(C", annotation_summary$seurat_clusters,
+  ", n=", annotation_summary$n_cells, ")"
+)
+label_map           <- setNames(annotation_summary$label,
+                                as.character(annotation_summary$seurat_clusters))
+obj$cell_type_label <- unname(label_map[as.character(obj$seurat_clusters)])
+
+Idents(obj) <- "cell_type_label"
+print(
+  DimPlot(obj, reduction = "umap", label = TRUE, label.size = 3.5, repel = TRUE) +
+    ggtitle("Integrated UMAP -- Annotated (diagnostic)") +
+    theme(plot.title = element_text(hjust = 0.5), legend.text = element_text(size = 8)) +
+    NoLegend()
+)
+
+Idents(obj) <- "cell_type"
+print(
+  DimPlot(obj, reduction = "umap", label = TRUE, label.size = 4, repel = TRUE) +
+    ggtitle("Integrated UMAP -- Cell types") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    guides(color = guide_legend(override.aes = list(size = 4)))
+)
+
+Idents(obj) <- "seurat_clusters"
+```
+
+## 7.18 Annotated DotPlot in canonical cluster order
+
+With annotations assigned, we produce a final DotPlot using the cell type labels
+in the canonical cluster order. This mirrors the numbered DotPlot from section
+7.4 but with interpretable names on the y-axis.
+
+```{r annotated-dotplot}
+cluster_order <- c(
+  "Naive", "MBC", "MBC_CR2pos", "MBC_NR4A", "MBC_Atypical",
+  "MBC_Cycling", "GC", "GC_Cycling", "PC", "PC_2", "Unsure"
+)
+
+Idents(obj) <- "cell_type"
+obj$cell_type <- factor(obj$cell_type, levels = cluster_order)
+Idents(obj)   <- "cell_type"
+
+markers_present_annot <- intersect(b_cell_markers, rownames(obj))
+print(
+  DotPlot(obj, features = markers_present_annot,
+          cols = c("gray90", "red"), dot.scale = 6) +
+    RotatedAxis() +
+    ggtitle("B cell marker panel -- annotated cell types") +
+    theme(axis.text.x = element_text(size = 8))
+)
+
+Idents(obj) <- "seurat_clusters"
+```
+
+## 7.19 Interpreting the annotations
+
+The annotated UMAP shows the full B cell landscape across both tissues.
+
+**Memory B cell compartment (clusters 0, 1, 2, 7, 8):** MBC and MBC_CR2pos are
+both present in LN and PT, both showing near-zero clonality and mixed isotype
+composition. They differ in expression of complement receptors (CR1, CR2) and
+associated transcription factors (NOTCH2, BACH2) in MBC_CR2pos. MBC_Atypical
+co-expresses atypical memory B cell markers (FCRL4, ITGAX) with a strong
+interferon-stimulated gene program. MBC_NR4A shows NR4A1, NR4A2, EGR1, EGR2,
+and CD69 with a partial LN contribution. MBC_Cycling shares the FCRL4 and IFN
+signature with MBC_Atypical but additionally shows S-phase proliferation markers.
+
+**GC and PC compartment (clusters 3, 4, 6, 9):** The tumor site harbors an active
+germinal center response. GC shows the BCL6/MEF2B/SERPINA9 signature without
+proliferation. GC_Cycling is dominated by the mitotic gene program with
+near-100% S+G2M phase. PC and PC_2 are the plasma cell output, both predominantly
+PT-located, with PC_2 showing a distinct expression profile (NKX6-3, CYS1,
+RASSF6, VDR, CD9) at 96 cells.
+
+**Naive B cells (cluster 5):** TCL1A, IGHD, IGHM, IL4R with near-zero clonality
+and IgM-dominant isotype. LN-enriched, as expected.
+
+**Cluster 10 (Unsure):** 32 cells, PT-only, no interpretable B cell identity
+signature at this cell count.
+
+A note on resolution: this tutorial uses a single patient with one LN and one PT
+sample. Some clusters -- particularly PC_2 (96 cells), MBC_Cycling (209 cells),
+and Unsure (32 cells) -- have low cell numbers, which limits the confidence of
+their annotation. A larger cohort would be needed to fully characterize these
+populations. The annotations here are a guide and a starting point, not a
+definitive biological conclusion.
+
+---
+
+# Save
+
+```{r save-annotated}
+rds_out_s7 <- file.path(RDS_DIR, "integrated_S7_annotated.rds")
+saveRDS(obj, file = rds_out_s7)
+message("Saved: ", rds_out_s7)
+message("Cell types: ", paste(sort(unique(obj$cell_type)), collapse = ", "))
+message("Cells: ", ncol(obj))
+```
+
+---
+
+*Part 2 complete. Annotated Seurat object saved to `RDS_Objects/`. Continue to
+Part 3 (BCR_GEX_Tutorial_Part3.Rmd) for BCR visualization and shared clone
+analysis.*
