@@ -99,7 +99,7 @@ cluster_resolution <- 0.5
 # ---- IG/TCR variable gene exclusion patterns --------------------------------
 variable_gene_patterns <- c(
   "^IGHV", "^IGKV", "^IGKJ", "^IGLV", "^IGLJ",
-  "^IGHD", "^IGHJ",
+  "^IGHD[0-9]", "^IGHJ",
   "^TRAV", "^TRBV", "^TRAJ", "^TRBJ", "^TRBD"
 )
 variable_gene_regex <- paste(variable_gene_patterns, collapse = "|")
