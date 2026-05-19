@@ -373,7 +373,7 @@ for (sid in names(bcr_annotated)) {
 
   # Save to PDF
   for (cid in names(tree_plots_all[[sid]])) {
-    out_file <- file.path(tree_dir, paste0(sid, "_", cid, "_tree.pdf"))
+    out_file <- file.path(tree_dir, paste0(cid, "_tree.pdf"))
     ggplot2::ggsave(out_file, tree_plots_all[[sid]][[cid]], width = 10, height = 8)
     message("Saved: ", out_file)
   }
