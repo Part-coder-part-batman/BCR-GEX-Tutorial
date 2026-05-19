@@ -23,31 +23,24 @@ knitr::opts_chunk$set(
 ---
 
 # Prerequisites
-
 Before running this part, the following must be in place.
-
-**Part 1 must be complete**
-You need the `_bcr_data.tsv` files produced at the end of Part 1
-(`BCR_GEX_Tutorial_Part1.Rmd`). These are joined to the Seurat objects in
-Step 4 of this part.
 
 **Input files required**
 
 | File | Where it comes from |
 |------|-------------------|
-| `P1_LN_bcr_data.tsv` | Part 1 output, at `P1_LN/Output/` |
-| `P1_PT_bcr_data.tsv` | Part 1 output, at `P1_PT/Output/` |
-| `sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `P1_LN_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
+| `P1_PT_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
 
 **R packages required**
 
 ```r
 install.packages(c("dplyr", "ggplot2", "data.table", "tibble",
                    "viridis", "scales", "patchwork", "pheatmap"))
-
 # Seurat v5
 install.packages("Seurat")
-
 # Optional but recommended for faster DEG computation
 install.packages("devtools")
 devtools::install_github("immunogenomics/presto")
@@ -55,6 +48,7 @@ devtools::install_github("immunogenomics/presto")
 
 **R version:** This tutorial was developed under R 4.3 with Seurat v5. Seurat v4
 will not work with the `IntegrateLayers()` workflow used in Step 6.
+
 
 ---
 
@@ -1321,22 +1315,20 @@ print(
 )
 ```
 
+
 ## 7.4 B cell marker DotPlot
 
-The DotPlot is the primary annotation tool. Read it row by row and look for the
-marker group that lights up. Pay attention to both dot size (percent expressing)
-and color (average expression level). This is the first pass -- several clusters
-will be immediately classifiable, while others will need additional evidence from
-BCR metadata and DEG analysis.
+The DotPlot is the primary annotation tool. Read it row by row and look for the marker group that lights up. Pay attention to both dot size (percent expressing) and color (average expression level). This is the first pass. Several clusters will be immediately classifiable, while others will need additional evidence from BCR metadata and DEG analysis.
 
-Some clusters stand out immediately: cluster 5 has the clearest signal in the
-dataset with TCL1A, IGHD, IGHM, and IL4R pointing unambiguously to naive B cells.
-Clusters 3 and 9 both show strong JCHAIN, MZB1, and XBP1 -- plasma cell markers.
-Clusters 4 and 6 express BCL6, MEF2B, and AICDA. Clusters 0, 1, 2, and 7 all
-show a memory B cell presence -- CD27-positive, no GC or naive markers. Clusters
-0 and 1 look very similar with no obvious distinguishing markers between them.
-Cluster 2 lights up on FCRL4, FCRL5, and interferon-stimulated genes. Cluster 7
-shows elevated CD83.
+Clusters 0, 1, and 6 express memory B cell markers (CD27, CD24, TNFSF13B). Clusters 0 and 6 share this profile with no other distinguishing markers between them and will need DEG analysis to separate. Cluster 1 stands out with FCRL4, FCRL5, and a clear interferon signature (IFIT1, IFIT3, IFI44, MX1), consistent with atypical memory B cells. IFN and stress signaling are known drivers of the atypical MBC program in the literature, which is why these features co-occur in the same population.
+
+Cluster 2 is unambiguous naive: TCL1A, IGHD, IGHM, and IL4R.
+
+Clusters 4 and 5 both express the GC program (BCL6, AICDA, MEF2B). Cluster 5 adds a cycling signature (MKI67, UBE2C, PCNA), so cluster 4 is non-cycling GC and cluster 5 is cycling GC.
+
+Clusters 3, 7, and 8 express plasma cell markers (JCHAIN, MZB1, XBP1). Clusters 3 and 7 are typical PC with no other distinguishing features. Cluster 8 adds cycling markers on top of the PC program, suggesting a plasmablast-like or cycling PC population.
+
+Cluster 9 is a small cluster (32 cells) with no obvious signature. At this size it may not represent a distinct population, and could be the leading edge of a cluster that would resolve with more cells.
 
 ```{r dotplot-step7}
 markers_present_s7 <- intersect(b_cell_markers, rownames(obj))
@@ -1369,11 +1361,10 @@ print(
 )
 ```
 
-Clusters 0 and 1 are substantially mixed between LN and PT, consistent with
-quiescent memory B cell populations found in both tissues. Cluster 5 is
-predominantly LN-derived, as expected for naive B cells. Cluster 7 has a
-partial LN contribution (~25%). All remaining clusters are predominantly or
-exclusively PT-derived.
+Clusters 0 and 6 are substantially mixed between LN and PT, consistent with
+quiescent memory B cell populations found in both tissues. Cluster 2 is
+predominantly LN-derived (~75%), as expected for naive B cells. All remaining
+clusters are predominantly or exclusively PT-derived.
 
 ## 7.6 FeaturePlots: key marker genes on UMAP
 
@@ -1398,8 +1389,8 @@ Isotype composition adds a BCR-level layer of evidence that transcriptomics
 alone cannot provide. Two clusters that both express CD27 can be distinguished
 if one is IgM-dominant (unswitched) and the other is IgG-dominant (class-switched).
 
-Cluster 5 is predominantly IgM-dominant, consistent with its naive identity.
-Clusters 1 and 2 show mixed isotype composition. The remaining clusters are
+Cluster 2 is predominantly IgM/IgD, consistent with its naive identity.
+Clusters 0 and 6 show mixed isotype composition. The remaining clusters are
 predominantly IgG1-dominant and are also largely PT-derived, highlighting a
 tissue-level difference: the LN is enriched for IgM and mixed isotype
 populations, while the PT is dominated by class-switched IgG.
@@ -1439,11 +1430,11 @@ if ("c_call" %in% colnames(obj@meta.data)) {
 
 ## 7.8 SHM frequency and clonality per cluster
 
-SHM frequency adds a further layer of evidence. Cluster 5 is clearly the lowest
+SHM frequency adds a further layer of evidence. Cluster 2 is clearly the lowest
 in the dataset with a near-zero median, consistent with its naive identity.
-Cluster 2 is notably lower than the other memory clusters (median ~0.03 vs
-~0.05-0.06 for clusters 0 and 1). Clusters 0, 1, 3, 4, 6, 7, 8, and 9 are
-broadly similar in the ~0.05-0.06 range. Cluster 10 appears elevated but has
+Cluster 1 is notably lower than the other memory clusters (median ~0.03 vs
+~0.06 for clusters 0 and 6). The remaining clusters (0, 3, 4, 5, 6, 7, 8) are
+broadly similar in the ~0.05-0.06 range. Cluster 9 appears elevated but has
 only 32 cells, making the estimate unreliable.
 
 ```{r shm-step7}
@@ -1480,8 +1471,11 @@ if ("mu_freq_H" %in% colnames(obj@meta.data)) {
 ## 7.9 Clonality per cluster
 
 Cluster 3 stands out as the most clonal in the dataset with a mean clone size
-of ~3.8. Clusters 0, 1, 5, and 7 show near-zero clonality. Cluster 2 shows
-moderate clonality (mean clone size ~2.0).
+of ~3.6 and ~85% of cells in expanded clones. Clusters 4, 5, 7, and 8 show
+moderate-to-high clonality (mean clone size 2.3-2.8, 74-79% expanded).
+Cluster 1 also shows substantial clonality (mean ~2.0, 61% expanded).
+Clusters 0, 2, and 6 show near-zero clonality (mean ~1.0, <15% expanded).
+Cluster 9 has only 4 cells with BCR data and is uninformative here.
 
 ```{r clonality-step7}
 if ("clone_id" %in% colnames(obj@meta.data)) {
@@ -1514,8 +1508,8 @@ if ("clone_id" %in% colnames(obj@meta.data)) {
 
 ## 7.10 Cell cycle per cluster
 
-Clusters 6 and 8 are the clear proliferating populations: cluster 6 shows
-near-100% S and G2M phase, and cluster 8 shows ~55% S and G2M.
+Clusters 5 and 8 are the clear proliferating populations: cluster 5 shows
+near-100% S and G2M phase, and cluster 8 shows ~100% S and G2M.
 
 ```{r cell-cycle-plot-step7}
 Idents(obj) <- "Phase"
@@ -1551,12 +1545,16 @@ cluster as a z-scored average expression heatmap. This gives an unbiased initial
 view of what distinguishes each cluster and provides hints that the pairwise DEG
 analysis in the following sections will confirm or refine.
 
-Several clusters show interpretable signals: cluster 2 lights up on OASL, IFIT1,
-FCRL4, and USP18. Cluster 3 shows immunoglobulin heavy and light chain V gene
-transcripts alongside SDC1 and GAS6. Cluster 4 shows SERPINA9 and MEF2B. Cluster
-6 is dominated by mitotic genes. Cluster 7 shows NR4A1, NR4A2, EGR2, and EGR1.
-Cluster 8 shows S-phase histone genes. Cluster 9 shows NKX6-3. Clusters 0 and 1
-show weak signals from this view alone and are resolved in section 7.12.
+Several clusters show interpretable signals: cluster 1 lights up on FCRL4, CCR1,
+and DUSP4, consistent with an atypical/IFN-driven MBC program. Cluster 2 shows
+IGHD and CD200, consistent with naive identity. Cluster 3 is dominated by
+immunoglobulin V gene transcripts (IGHV3-48, IGHV6-1, IGHV3-21, IGKV1-5,
+IGHV3-23), consistent with plasma cells. Cluster 4 shows SERPINA9 and MEF2B
+(GC markers). Cluster 5 is dominated by mitotic genes (KIF18B, KIFC1, CDCA3,
+SPC25). Cluster 8 shows S-phase histone genes alongside IGLV3-19. Clusters 0
+and 6 show weak, non-specific signals from this view alone and are resolved in
+section 7.12. Cluster 7 also shows a relatively weak top-5 signal, and cluster
+9 is too small (32 cells) for reliable per-cluster DEG signal.
 
 For faster computation, install the `presto` package -- Seurat will use it
 automatically:
@@ -1609,24 +1607,23 @@ if (nrow(top5) > 0) {
 
 ## 7.12 Pairwise DEGs: resolving clusters 0, 1, and 2
 
-Clusters 0 and 1 cannot be distinguished from the DotPlot or heatmap alone --
+Clusters 0 and 6 cannot be distinguished from the DotPlot or heatmap alone --
 both show a memory B cell profile. We run each against the other two combined.
 Cluster 2 is included as a reference point.
 
-```{r deg-cluster-0-1-2}
-deg_0_vs_1_2 <- FindMarkers(obj, ident.1 = 0, ident.2 = c(1, 2),
+```{r deg-cluster-0-1-6}
+deg_0_vs_1_6 <- FindMarkers(obj, ident.1 = 0, ident.2 = c(1, 6),
                              min.pct = 0.25, logfc.threshold = 0.1,
                              only.pos = FALSE, verbose = FALSE)
-deg_1_vs_0_2 <- FindMarkers(obj, ident.1 = 1, ident.2 = c(0, 2),
+deg_1_vs_0_6 <- FindMarkers(obj, ident.1 = 1, ident.2 = c(0, 6),
                              min.pct = 0.25, logfc.threshold = 0.1,
                              only.pos = FALSE, verbose = FALSE)
-deg_2_vs_0_1 <- FindMarkers(obj, ident.1 = 2, ident.2 = c(0, 1),
+deg_6_vs_0_1 <- FindMarkers(obj, ident.1 = 6, ident.2 = c(0, 1),
                              min.pct = 0.25, logfc.threshold = 0.1,
                              only.pos = FALSE, verbose = FALSE)
-
-for (res in list(list(deg_0_vs_1_2, "Cluster 0 vs 1+2"),
-                 list(deg_1_vs_0_2, "Cluster 1 vs 0+2"),
-                 list(deg_2_vs_0_1, "Cluster 2 vs 0+1"))) {
+for (res in list(list(deg_0_vs_1_6, "Cluster 0 vs 1+6"),
+                 list(deg_1_vs_0_6, "Cluster 1 vs 0+6"),
+                 list(deg_6_vs_0_1, "Cluster 6 vs 0+1"))) {
   df      <- res[[1]]
   label   <- res[[2]]
   df$gene <- rownames(df)
@@ -1639,41 +1636,49 @@ for (res in list(list(deg_0_vs_1_2, "Cluster 0 vs 1+2"),
 }
 ```
 
-**Cluster 0** lacks strong functional identity markers. The top DEGs are
-ribosomal protein genes, translation factors, and lncRNAs with modest fold
-changes and small differences in percent expressing. Combined with near-zero
-clonality and mixed isotype composition, we label this cluster **MBC**.
+**Cluster 0** lacks a strong functional identity. Its top markers are immediate
+early genes (DUSP1, JUN, JUNB, JUND, NFKBIA), AP-1 family members, and
+ribosomal/translation-related genes. The IEG signature can reflect genuine
+recent activation, dissociation-induced stress, or both, and on its own does
+not define a stable cell state. Combined with near-zero clonality, mixed
+isotype composition, and mixed tissue origin, we label this cluster **MBC_Basal**
+as the generic memory pool.
 
-**Cluster 1** shows CR1, CR2, NOTCH2, BACH2, EBF1, AKT3, FOXP1, and KLF12 as
-its top specific markers. We name this cluster **MBC_CR2pos**.
+**Cluster 1** has the clearest pairwise signal: DHRS9, FCRL4, USP18, ISG15,
+IFIT1, IFIT3, DUSP4, RSAD2, CCR1, IFI6, and ITGAX, all with high fold changes
+(2.5-3.8). This is a canonical atypical/IFN-driven MBC program. We call this
+cluster **MBC_Atypical**.
 
-**Cluster 2** has the clearest pairwise signal: OASL, USP18, FCRL4, IFIT1,
-ISG15, DUSP4, RSAD2, CCR1, IFIT3, and ITGAX, all with high fold changes (2.5-4.0).
-We call this cluster **MBC_Atypical**.
+**Cluster 6** is defined by a stable mature MBC transcription program:
+EBF1, BACH2, FOXP1, NOTCH2, and ZEB2 are broadly expressed (50-78% of cells),
+alongside CR1, CR2, and ST6GAL1, all significantly upregulated versus
+cluster 0. FCRL5 is also elevated. This profile, combined with the lack of
+IFN, GC, PC, cycling, or atypical programs, matches the classical CD21+/CR2+
+resting memory B cell state. We label this cluster **MBC_CR2pos**.
 
-## 7.13 Pairwise DEGs: confirming PC and GC identities
+## 7.13 Pairwise DEGs: distinguishing the PC subtypes
 
-The PC and GC clusters already have provisional identities from the DotPlot --
-this step confirms and locks them in.
+The GC clusters (4 non-cycling, 5 cycling) and the cycling identity of cluster 5
+versus 4 are already locked in from the DotPlot and cell cycle plots. The three
+PC clusters (3, 7, and 8) all express the core PC program (JCHAIN, MZB1, XBP1),
+but the DotPlot already hinted at differences: cluster 8 layers a cycling
+signature on top of the PC markers. This step tests each PC cluster against the
+other two to identify the specific genes that distinguish them and to confirm
+or refine those provisional identities.
 
-```{r deg-pc-gc}
-deg_3_vs_689 <- FindMarkers(obj, ident.1 = 3, ident.2 = c(6, 8, 9),
-                             min.pct = 0.20, logfc.threshold = 0.1,
-                             only.pos = TRUE, verbose = FALSE)
-deg_6_vs_389 <- FindMarkers(obj, ident.1 = 6, ident.2 = c(3, 8, 9),
-                             min.pct = 0.20, logfc.threshold = 0.1,
-                             only.pos = TRUE, verbose = FALSE)
-deg_8_vs_369 <- FindMarkers(obj, ident.1 = 8, ident.2 = c(3, 6, 9),
-                             min.pct = 0.20, logfc.threshold = 0.1,
-                             only.pos = TRUE, verbose = FALSE)
-deg_9_vs_368 <- FindMarkers(obj, ident.1 = 9, ident.2 = c(3, 6, 8),
-                             min.pct = 0.20, logfc.threshold = 0.1,
-                             only.pos = TRUE, verbose = FALSE)
-
-for (res in list(list(deg_3_vs_689, "Cluster 3 vs 6+8+9"),
-                 list(deg_6_vs_389, "Cluster 6 vs 3+8+9"),
-                 list(deg_8_vs_369, "Cluster 8 vs 3+6+9"),
-                 list(deg_9_vs_368, "Cluster 9 vs 3+6+8"))) {
+```{r deg-pc}
+deg_3_vs_78 <- FindMarkers(obj, ident.1 = 3, ident.2 = c(7, 8),
+                            min.pct = 0.20, logfc.threshold = 0.1,
+                            only.pos = TRUE, verbose = FALSE)
+deg_7_vs_38 <- FindMarkers(obj, ident.1 = 7, ident.2 = c(3, 8),
+                            min.pct = 0.20, logfc.threshold = 0.1,
+                            only.pos = TRUE, verbose = FALSE)
+deg_8_vs_37 <- FindMarkers(obj, ident.1 = 8, ident.2 = c(3, 7),
+                            min.pct = 0.20, logfc.threshold = 0.1,
+                            only.pos = TRUE, verbose = FALSE)
+for (res in list(list(deg_3_vs_78, "Cluster 3 vs 7+8"),
+                 list(deg_7_vs_38, "Cluster 7 vs 3+8"),
+                 list(deg_8_vs_37, "Cluster 8 vs 3+7"))) {
   df      <- res[[1]]
   label   <- res[[2]]
   df$gene <- rownames(df)
@@ -1686,21 +1691,33 @@ for (res in list(list(deg_3_vs_689, "Cluster 3 vs 6+8+9"),
 }
 ```
 
-**Cluster 3** is distinguished by immunoglobulin heavy and light chain expression
-alongside GAS6, SPAG4, FNDC3B, ITM2C, and PECAM1. This is the main PC population.
+**Cluster 3** is dominated by immunoglobulin heavy and light chain V gene
+transcripts (IGHV3-48, IGLV6-57, IGHV3-21, IGKV3-20, IGKV1-5, IGKV3-11, and
+many others) alongside ER and secretory pathway machinery (SSR4, PRDX4, ITM2C,
+SPAG4, FCGRT, TCN2). This is the canonical antibody-secreting PC signature.
+We label this cluster **PC**.
 
-**Cluster 6** is dominated by mitotic genes (KIF18B, KIFC1, CCNB2, CDCA7, MYBL1)
-with very high fold changes, alongside BACH2 and SERPINA9 placing these cells in
-a GC context. Combined with near-100% S+G2M composition, this is the cycling GC
-B cell population: **GC_Cycling**.
+**Cluster 7** shows a strikingly different signature from the other PC
+clusters. The top markers are transcription factors and scaffolding genes
+(RUNX1, MED13L, WWOX, ATXN1, FNDC3B, SIPA1L3, BCAS3) and notably RGS13 and
+RUNX1, both of which are associated with germinal center light zone B cells
+and pre-PC differentiation. Bulk Ig V gene transcription is much lower than
+cluster 3 and the ER/secretory machinery is largely absent. Combined with the
+PC marker expression seen on the DotPlot, this represents a second PC subset
+distinct from cluster 3, possibly with retained GC features. We label this
+cluster **PC_2**.
 
-**Cluster 8** shows S-phase histone genes alongside FCRL4, GBP1, IFI44L, USP18,
-and TNFRSF1B. The combination of proliferation markers with FCRL4 and IFN genes
-links this cluster to MBC_Atypical -- cycling atypical memory B cells:
-**MBC_Cycling**.
+**Cluster 8** is dominated by cycling genes with very high fold changes:
+S-phase histones (HIST1H3C, HIST1H4F), mitotic kinases and cyclins (CDK1,
+PLK1, AURKB, CCNA2, CCNB2), replication machinery (RRM2, TYMS, PCLAF, ORC6,
+CDT1, MKI67, TOP2A), and kinetochore/spindle components (KIFC1, CENPA, CENPF,
+BIRC5). Combined with PC marker expression on the DotPlot and ~100% S+G2M
+cell cycle composition, this is the actively proliferating antibody-secreting
+population: **Plasmablast**.
 
-**Cluster 9** shows NKX6-3, CYS1, RASSF6, VDR, CD9, and DENND6B, confirming a
-PC identity distinct from cluster 3: **PC_2**.
+**Cluster 9** is too small (32 cells) for reliable per-cluster DEG signal and
+does not show a clear, distinguishing signature. We label it **Unsure** and
+treat it cautiously in downstream analyses.
 
 ## 7.14 Optional: additional DEG comparisons
 
@@ -1771,34 +1788,32 @@ if (is.null(deg_mode)) {
 
 After reviewing all plots and DEGs, the final annotation table is:
 
-| Cluster | n | Label | Key evidence |
-|---------|---|-------|-------------|
-| 0 | 1,793 | MBC | Near-zero clonality, mixed isotype, no specific identity markers |
-| 1 | 1,507 | MBC_CR2pos | CR1, CR2, NOTCH2, BACH2, EBF1, AKT3 specific vs clusters 0 and 2 |
-| 2 | 1,222 | MBC_Atypical | FCRL4, ITGAX, strong IFN program (OASL, USP18, ISG15, IFITs, DUSP4) |
-| 3 | 872 | PC | IGHG1/2/3/4, IGKC, GAS6, SPAG4, FNDC3B, ITM2C, PECAM1 |
-| 4 | 663 | GC | BCL6, MEF2B, SERPINA9 -- non-proliferating GC B cells |
-| 5 | 653 | Naive | TCL1A, IGHD, IGHM, IL4R; near-zero clonality; LN-enriched |
-| 6 | 504 | GC_Cycling | Pure mitotic program (KIF18B, KIFC1, CCNB2); near-100% S+G2M; PT-only |
-| 7 | 406 | MBC_NR4A | NR4A1, NR4A2, EGR1, EGR2, CD69; partial LN contribution |
-| 8 | 209 | MBC_Cycling | HIST1H3H/1E, FCRL4, GBP1, IFI44L, USP18 -- cycling atypical MBCs |
-| 9 | 96 | PC_2 | NKX6-3, CYS1, RASSF6, VDR, CD9; PT-only; second PC population |
-| 10 | 32 | Unsure | No interpretable signature at 32 cells; PT-only |
+| Cluster | n    | Label         | Key evidence |
+|---------|------|---------------|--------------|
+| 0       | 1942 | MBC_Basal     | Near-zero clonality, mixed isotype, immediate early gene program (DUSP1, JUN, JUNB, JUND, NFKBIA); no specific lineage identity |
+| 1       | 934  | MBC_Atypical  | FCRL4, ITGAX, USP18, ISG15, IFIT1, IFIT3, DUSP4, RSAD2, CCR1, IFI6; strong atypical + IFN program |
+| 2       | 668  | Naive         | TCL1A, IGHD, IGHM, IL4R, CD200; near-zero clonality and SHM; LN-enriched |
+| 3       | 665  | PC            | Heavy Ig V gene transcription (IGHV3-48, IGHV3-21, IGKV3-20, many others); ER/secretory machinery (SSR4, PRDX4, ITM2C, SPAG4, FCGRT) |
+| 4       | 276  | GC            | BCL6, MEF2B, SERPINA9; non-proliferating GC B cells |
+| 5       | 326  | GC_Cycling    | GC markers (BCL6, MEF2B, SERPINA9) plus mitotic program (KIF18B, KIFC1, CDCA3); ~100% S+G2M |
+| 6       | 291  | MBC_CR2pos    | CR1, CR2, NOTCH2, ST6GAL1; mature MBC TF program (EBF1, BACH2, FOXP1, ZEB2); LN-biased |
+| 7       | 210  | PC_2          | Second PC subset distinct from cluster 3; RGS13, RUNX1, MED13L, WWOX, ATXN1 with retained GC-leaning features |
+| 8       | 130  | Plasmablast   | Pure cycling program (HIST1H3C, UBE2C, CCNA2, CDK1, MKI67, TOP2A, AURKB) on top of PC markers; ~100% S+G2M |
+| 9       | 32   | Unsure        | No interpretable signature at 32 cells |
 
 ```{r cluster-annotations}
 # ---- USER SETTINGS -----------------------------------------------------------
 cluster_annotations <- c(
-  "0"  = "MBC",
-  "1"  = "MBC_CR2pos",
-  "2"  = "MBC_Atypical",
-  "3"  = "PC",
-  "4"  = "GC",
-  "5"  = "Naive",
-  "6"  = "GC_Cycling",
-  "7"  = "MBC_NR4A",
-  "8"  = "MBC_Cycling",
-  "9"  = "PC_2",
-  "10" = "Unsure"
+  "0" = "MBC_Basal",
+  "1" = "MBC_Atypical",
+  "2" = "Naive",
+  "3" = "PC",
+  "4" = "GC",
+  "5" = "GC_Cycling",
+  "6" = "MBC_CR2pos",
+  "7" = "PC_2",
+  "8" = "Plasmablast",
+  "9" = "Unsure"
 )
 # ------------------------------------------------------------------------------
 ```
@@ -1872,8 +1887,8 @@ in the canonical cluster order. This mirrors the numbered DotPlot from section
 
 ```{r annotated-dotplot}
 cluster_order <- c(
-  "Naive", "MBC", "MBC_CR2pos", "MBC_NR4A", "MBC_Atypical",
-  "MBC_Cycling", "GC", "GC_Cycling", "PC", "PC_2", "Unsure"
+  "Naive", "MBC_Basal", "MBC_CR2pos", "MBC_Atypical",
+  "GC", "GC_Cycling", "PC", "PC_2", "Plasmablast", "Unsure"
 )
 
 Idents(obj) <- "cell_type"
@@ -1896,34 +1911,43 @@ Idents(obj) <- "seurat_clusters"
 
 The annotated UMAP shows the full B cell landscape across both tissues.
 
-**Memory B cell compartment (clusters 0, 1, 2, 7, 8):** MBC and MBC_CR2pos are
-both present in LN and PT, both showing near-zero clonality and mixed isotype
-composition. They differ in expression of complement receptors (CR1, CR2) and
-associated transcription factors (NOTCH2, BACH2) in MBC_CR2pos. MBC_Atypical
-co-expresses atypical memory B cell markers (FCRL4, ITGAX) with a strong
-interferon-stimulated gene program. MBC_NR4A shows NR4A1, NR4A2, EGR1, EGR2,
-and CD69 with a partial LN contribution. MBC_Cycling shares the FCRL4 and IFN
-signature with MBC_Atypical but additionally shows S-phase proliferation markers.
+**Memory B cell compartment (clusters 0, 1, 6):** MBC_Basal and MBC_CR2pos are
+both present in LN and PT, both showing low clonality and mixed isotype
+composition. MBC_Basal shows an immediate early gene program (DUSP1, JUN, JUNB,
+JUND, NFKBIA) without lineage-specific commitment markers and lacks a clear
+functional identity beyond CD27+ memory. MBC_CR2pos is defined by complement
+receptors (CR1, CR2), NOTCH2, ST6GAL1, and a mature MBC transcription factor
+program (EBF1, BACH2, FOXP1, ZEB2), and is LN-biased. MBC_Atypical co-expresses
+atypical memory B cell markers (FCRL4, ITGAX) with a strong interferon-stimulated
+gene program (USP18, ISG15, IFIT1, IFIT3, RSAD2, IFI6), consistent with the
+known link between IFN/stress signaling and the atypical MBC state.
 
-**GC and PC compartment (clusters 3, 4, 6, 9):** The tumor site harbors an active
-germinal center response. GC shows the BCL6/MEF2B/SERPINA9 signature without
-proliferation. GC_Cycling is dominated by the mitotic gene program with
-near-100% S+G2M phase. PC and PC_2 are the plasma cell output, both predominantly
-PT-located, with PC_2 showing a distinct expression profile (NKX6-3, CYS1,
-RASSF6, VDR, CD9) at 96 cells.
+**GC and PC compartment (clusters 3, 4, 5, 7, 8):** The tumor site harbors an
+active germinal center response. GC shows the BCL6/MEF2B/SERPINA9 signature
+without proliferation. GC_Cycling carries the same GC program with an added
+mitotic signature and ~100% S+G2M phase composition. PC is the dominant
+antibody-secreting population, defined by heavy Ig V gene transcription and ER
+and secretory machinery (SSR4, PRDX4, ITM2C, SPAG4, FCGRT). PC_2 is a smaller,
+distinct PC subset with retained GC-leaning features (RGS13, RUNX1) and a
+broader transcription factor / scaffolding program rather than dominant
+secretory machinery. Plasmablast layers a pure cycling program (HIST1H3C,
+UBE2C, CCNA2, CDK1, MKI67, TOP2A, AURKB) on top of the PC markers, with ~100%
+S+G2M composition.
 
-**Naive B cells (cluster 5):** TCL1A, IGHD, IGHM, IL4R with near-zero clonality
-and IgM-dominant isotype. LN-enriched, as expected.
+**Naive B cells (cluster 2):** TCL1A, IGHD, IGHM, IL4R, and CD200 with
+near-zero clonality and SHM, and an IgM/IgD-dominant isotype profile. LN-enriched,
+as expected.
 
-**Cluster 10 (Unsure):** 32 cells, PT-only, no interpretable B cell identity
-signature at this cell count.
+**Cluster 9 (Unsure):** 32 cells with no interpretable B cell identity
+signature at this cell count. Likely the leading edge of a population that
+would resolve with more cells, rather than a distinct biological state.
 
-A note on resolution: this tutorial uses a single patient with one LN and one PT
-sample. Some clusters -- particularly PC_2 (96 cells), MBC_Cycling (209 cells),
-and Unsure (32 cells) -- have low cell numbers, which limits the confidence of
-their annotation. A larger cohort would be needed to fully characterize these
-populations. The annotations here are a guide and a starting point, not a
-definitive biological conclusion.
+A note on resolution: this tutorial uses a single patient with one LN and one
+PT sample. Some clusters -- particularly Plasmablast (130 cells), PC_2 (210
+cells), and Unsure (32 cells) -- have low cell numbers, which limits the
+confidence of their annotation. A larger cohort would be needed to fully
+characterize these populations. The annotations here are a guide and a starting
+point, not a definitive biological conclusion.
 
 ---
 

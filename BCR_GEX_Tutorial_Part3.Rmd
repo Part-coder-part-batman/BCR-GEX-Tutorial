@@ -1,5 +1,5 @@
 ---
-title: "BCR + GEX Integration Tutorial — Part 3: Repertoire Visualization"
+title: "BCR + GEX Integration Tutorial -- Part 3: Repertoire Visualization"
 subtitle: "Clonality donuts, phylogenetic trees, and shared clone analysis"
 author: "Nachi Nathan"
 date: "`r Sys.Date()`"
@@ -23,20 +23,18 @@ knitr::opts_chunk$set(
 ---
 
 # Prerequisites
-
 Before running this part, the following must be in place.
 
-**Parts 1 and 2 must be complete**
+**Input files required**
 
-| File | Produced by | Location |
-|------|-------------|----------|
-| `P1_LN_bcr_data.tsv` | Part 1 | `P1_LN/Output/` |
-| `P1_PT_bcr_data.tsv` | Part 1 | `P1_PT/Output/` |
-| `integrated_S7_annotated.rds` | Part 2 | `RDS_Objects/` |
-| `BCR_viz_functions.R` | This tutorial | `ROOT_DIR/` |
+| File | Where it comes from |
+|------|-------------|
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `integrated_S7_annotated.rds` | Part 2 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `BCR_viz_functions.R` | This tutorial repo, at `ROOT_DIR/` |
 
 **IQ-TREE 2 (required for phylogenetic trees only)**
-
 The tree section uses the dowser package, which calls IQ-TREE 2 externally to
 build the tree topology. IQ-TREE 2 must be installed before running
 Section 8.4. The donut plot sections (8.1--8.3) and all of Step 9 do not
@@ -45,11 +43,9 @@ require IQ-TREE and can be run independently.
 1. Download the IQ-TREE 2 binary for your operating system from:
    https://github.com/Cibiv/IQ-TREE/releases
    (look for the latest release and download the zip for your OS)
-
 2. Unzip and note the path to the executable:
    - Windows: `C:/tools/iqtree2/bin/iqtree2.exe`
    - macOS/Linux: `/usr/local/bin/iqtree2`
-
 3. Either add the bin folder to your system PATH so it can be called as
    `iqtree2`, or supply the full path to the `exec` argument in
    `build_bcr_trees()` as shown in Section 8.4.
@@ -60,16 +56,12 @@ require IQ-TREE and can be run independently.
 install.packages(c("dplyr", "ggplot2", "data.table", "writexl", "tibble",
                    "tidyr", "patchwork", "scales", "stringr",
                    "dowser", "ape", "RColorBrewer", "ggraph"))
-
-# Seurat v5
 install.packages("Seurat")
-
 # scRepertoire
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
 BiocManager::install("scRepertoire")
-
-# ggtree is on Bioconductor — cannot be installed with install.packages()
+# ggtree is on Bioconductor -- cannot be installed with install.packages()
 BiocManager::install("ggtree")
 ```
 
@@ -501,17 +493,16 @@ The tree tip labels use the same cell type color palette as the UMAP in Part 2.
 
 ```{r cluster-colors}
 cluster_colors <- c(
-  "MBC"          = "#F8766D",
-  "MBC_CR2pos"   = "#DB8E00",
-  "MBC_Atypical" = "#AEA200",
-  "MBC_NR4A"     = "#64B200",
-  "MBC_Cycling"  = "#00BD5C",
-  "Naive"        = "#00C1A7",
-  "GC"           = "#00A6FF",
-  "GC_Cycling"   = "#B385FF",
-  "PC"           = "#EF67EB",
-  "PC_2"         = "#FF63B6",
-  "Unsure"       = "#AAAAAA"
+  "MBC_Basal"    = "#F8766D",
+  "MBC_Atypical" = "#D89000",
+  "Naive"        = "#A3A500",
+  "PC"           = "#39B600",
+  "GC"           = "#00BF7D",
+  "GC_Cycling"   = "#00BFC4",
+  "MBC_CR2pos"   = "#00B0F6",
+  "PC_2"         = "#9590FF",
+  "Plasmablast"  = "#E76BF3",
+  "Unsure"       = "#FF62BC"
 )
 ```
 
@@ -596,7 +587,7 @@ for (sid in c("P1_LN", "P1_PT")) {
 
   for (cid in names(plots)) {
     if (!is.null(plots[[cid]])) {
-      out_file <- file.path(tree_dir, paste0(sid, "_", cid, "_tree.pdf"))
+      out_file <- file.path(tree_dir, paste0(cid, "_tree.pdf"))
       ggplot2::ggsave(out_file, plots[[cid]], width = 10, height = 8)
       message("Saved: ", out_file)
     }
@@ -781,6 +772,17 @@ get different totals. Immcantation groups cells more aggressively than CTstrict,
 so the hybrid approach typically counts more cells per shared clone. Neither is
 wrong; they answer slightly different questions. The pure CTstrict approach used
 here is more reproducible because it depends only on scRepertoire.
+
+**A note on scRepertoire version:** This tutorial was written and tested against
+scRepertoire v1.12.0. The CTstrict string format used to identify shared clones
+changed between major versions, so the same input data can produce slightly
+different shared clone counts depending on which version is installed. With
+v1.12.0, the shared count for P1 in Section 9.3.3 below is 151. On other
+versions you may see a different number for the same set of cells and the same
+underlying Immcantation clones -- the cells matched are identical, only the
+string used to compare them is formatted differently. To exactly reproduce the
+counts shown here, pin scRepertoire to v1.12.0. Otherwise small numeric
+differences are expected and do not reflect a bug.
 
 ---
 
@@ -1119,8 +1121,8 @@ v2.0. If you get a "could not find function" error for one, use the other.
 ```{r clonal-occupy, fig.height=5, fig.width=9}
 # Set cell_type factor levels to control x-axis order
 cluster_order <- c(
-  "Naive", "MBC", "MBC_CR2pos", "MBC_NR4A", "MBC_Atypical",
-  "MBC_Cycling", "GC", "GC_Cycling", "PC", "PC_2", "Unsure"
+  "Naive", "MBC_Basal", "MBC_CR2pos", "MBC_Atypical",
+  "GC", "GC_Cycling", "PC", "PC_2", "Plasmablast", "Unsure"
 )
 
 seu_scRep$cell_type <- factor(seu_scRep$cell_type, levels = cluster_order)
