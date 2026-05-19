@@ -2,10 +2,10 @@
 # BCR_viz_functions.R
 # Helper functions for BCR clonality visualization and phylogenetic trees
 #
-# These functions are sourced by BCR_GEX_Tutorial_8.Rmd — do not run this
+# These functions are sourced by BCR_GEX_Tutorial_Part3.Rmd -- do not run this
 # file directly. All required packages are loaded by the tutorial script.
 #
-# INPUT: The annotated BCR data frame produced in Part 8 after cell_type
+# INPUT: The annotated BCR data frame produced in Part 3 after cell_type
 # metadata has been joined from the integrated Seurat object. This data frame
 # must contain one row per BCR contig (heavy and light chains), with the
 # following key columns:
@@ -15,17 +15,17 @@
 #   - c_call        : isotype (e.g. "IGHG1", "IGHM")
 #   - locus         : chain type ("IGH", "IGK", "IGL")
 #   - cell_type     : cluster annotation from the Seurat object (NA for cells
-#                     filtered out during GEX QC — these are retained in the
+#                     filtered out during GEX QC -- these are retained in the
 #                     BCR data but excluded from cluster-level visualizations)
 #   - sample_id     : sample of origin (e.g. "P1_LN", "P1_PT")
 #   - sequence      : nucleotide sequence (required for trees)
 #   - germline_alignment_d_mask : germline sequence (required for trees)
 #
 # Functions in this file (in order of use):
-#   1. plot_combined_donut()       — all clones in one donut, colored by isotype
-#   2. plot_isotype_donuts()       — one donut per isotype
-#   3. plot_cluster_donuts()       — one donut per cell type cluster
-#   4. build_bcr_trees()           — phylogenetic trees for top N clones or a
+#   1. plot_combined_donut()       -- all clones in one donut, colored by isotype
+#   2. plot_isotype_donuts()       -- one donut per isotype
+#   3. plot_cluster_donuts()       -- one donut per cell type cluster
+#   4. build_bcr_trees()           -- phylogenetic trees for top N clones or a
 #                                    user-supplied list of clone IDs
 #
 # External dependency for trees:
@@ -211,7 +211,7 @@ plot_combined_donut <- function(bcr_data, sample_name, color_map = NULL) {
   label_all <- paste0(sample_name, "\nTotal: ", total_cells,
                       "\nExpanded: ", expanded_cells)
   p_all <- .render_donut(donut_data, center_label = label_all,
-                         title = paste0(sample_name, " — All clones"))
+                         title = paste0(sample_name, " -- All clones"))
 
   message("  Total cells: ", total_cells, " | Expanded clones: ", n_expanded)
   return(list(all_clones = p_all))
@@ -267,7 +267,7 @@ plot_isotype_donuts <- function(bcr_data, sample_name,
     n_cells  <- nrow(iso_data)
 
     if (n_cells < min_cells) {
-      message("  Skipping ", iso, " — only ", n_cells, " cells (min_cells = ", min_cells, ")")
+      message("  Skipping ", iso, " -- only ", n_cells, " cells (min_cells = ", min_cells, ")")
       next
     }
 
@@ -293,7 +293,7 @@ plot_isotype_donuts <- function(bcr_data, sample_name,
 
     label_all <- paste0(iso, "\n", total, " cells")
     p_all <- .render_donut(donut_data, center_label = label_all,
-                           title = paste0(sample_name, " — ", iso),
+                           title = paste0(sample_name, " -- ", iso),
                            fill_values = fill_values)
 
     message("  ", iso, ": ", total, " cells | ", n_expanded, " expanded clones")
@@ -362,7 +362,7 @@ plot_cluster_donuts <- function(bcr_data, sample_name,
     n_cells <- nrow(cl_data)
 
     if (n_cells < min_cells) {
-      message("  Skipping '", cl, "' — only ", n_cells,
+      message("  Skipping '", cl, "' -- only ", n_cells,
               " cells (min_cells = ", min_cells, ")")
       next
     }
@@ -439,7 +439,7 @@ plot_cluster_donuts <- function(bcr_data, sample_name,
 #' size order. Skipped clones (identical VDJ, too small after filtering) are
 #' replaced by the next available clone so that up to top_n plots are returned.
 #'
-#' Prerequisites — IQ-TREE 2:
+#' Prerequisites -- IQ-TREE 2:
 #'   dowser::getTrees() requires IQ-TREE 2 to be installed on your system.
 #'   1. Download from: https://github.com/Cibiv/IQ-TREE/releases
 #'   2. Unzip and note the full path to the executable
@@ -447,7 +447,7 @@ plot_cluster_donuts <- function(bcr_data, sample_name,
 #'             "/usr/local/bin/iqtree2" on macOS/Linux)
 #'   3. Pass this path to exec, or add the bin folder to your system PATH.
 #'
-#' @param bcr_data Annotated BCR data frame (output of Part 8 join step).
+#' @param bcr_data Annotated BCR data frame (output of Part 3 join step).
 #'   Must contain: clone_id, cell_id, c_call, locus, sequence,
 #'   germline_alignment_d_mask, v_sequence_start, j_sequence_end, and the
 #'   column specified by cell_type_col.
@@ -500,14 +500,14 @@ build_bcr_trees <- function(bcr_data,
     stop("The following required columns are missing from bcr_data:\n  ",
          paste(missing_cols, collapse = ", "), "\n",
          "Make sure germline reconstruction (Part 1) and cell_type joining ",
-         "(Part 8) have both been completed.")
+         "(Part 3) have both been completed.")
   }
 
   has_vdj_coords <- all(c("v_sequence_start", "j_sequence_end") %in% colnames(bcr_data))
   if (!has_vdj_coords) {
     warning("Columns v_sequence_start and j_sequence_end not found. ",
             "Tip size grouping will use the full sequence column instead of VDJ region. ",
-            "Re-run Part 0 (MakeDb.py) to obtain VDJ coordinates.")
+            "Re-run MakeDb.py (Step 00, see 00_Docker_Setup_and_VDJ_Assignment.md) to obtain VDJ coordinates.")
   }
 
   # ---- Select clones --------------------------------------------------------
@@ -552,7 +552,7 @@ build_bcr_trees <- function(bcr_data,
 
       n_cells <- dplyr::n_distinct(df$cell_id[df$locus == "IGH"])
       if (n_cells < min_clone_size) {
-        message("  Skipping — only ", n_cells, " heavy chain cells")
+        message("  Skipping -- only ", n_cells, " heavy chain cells")
         tree_plots[[cid]] <- NULL
         next
       }
@@ -600,7 +600,7 @@ build_bcr_trees <- function(bcr_data,
       # Re-check size after all filtering
       n_cells_post <- dplyr::n_distinct(df$cell_id[df$locus == "IGH"])
       if (n_cells_post < min_clone_size) {
-        message("  Skipping — only ", n_cells_post,
+        message("  Skipping -- only ", n_cells_post,
                 " cells remain after filtering (min_clone_size = ",
                 min_clone_size, ")")
         tree_plots[[cid]] <- NULL
@@ -639,7 +639,7 @@ build_bcr_trees <- function(bcr_data,
       # valid finding, but there is no phylogenetic signal to visualize).
       n_unique_heavy <- dplyr::n_distinct(igh_df$VDJ_DNA_sequence)
       if (n_unique_heavy < 2) {
-        message("  Skipping — all ", n_cells_post, " cells share the same ",
+        message("  Skipping -- all ", n_cells_post, " cells share the same ",
                 "heavy chain VDJ sequence. No phylogenetic signal to build ",
                 "a tree from (clonal expansion with no further SHM).")
         tree_plots[[cid]] <- NULL
@@ -715,7 +715,7 @@ build_bcr_trees <- function(bcr_data,
       }
 
       if (is.null(clones_fmt) || nrow(clones_fmt) == 0) {
-        message("  Skipping — formatClones returned no data.")
+        message("  Skipping -- formatClones returned no data.")
         tree_plots[[cid]] <- NULL
         next
       }
@@ -730,7 +730,7 @@ build_bcr_trees <- function(bcr_data,
       base_plot <- tryCatch(
         dowser::plotTrees(trees, tips = "c_gene", scale = FALSE)[[1]],
         error = function(e) {
-          message("  plotTrees failed: ", e$message, " — skipping.")
+          message("  plotTrees failed: ", e$message, " -- skipping.")
           NULL
         }
       )
