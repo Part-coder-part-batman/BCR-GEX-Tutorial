@@ -29,9 +29,9 @@ Before running this part, the following must be in place.
 
 | File | Where it comes from |
 |------|-------------|
-| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
-| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
-| `integrated_S7_annotated.rds` | Part 2 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
+| `integrated_S7_annotated.rds` | Part 2 output, or download from Zenodo: https://zenodo.org/records/20287324 |
 | `BCR_viz_functions.R` | This tutorial repo, at `ROOT_DIR/` |
 
 **IQ-TREE 2 (required for phylogenetic trees only)**
@@ -106,6 +106,11 @@ suppressPackageStartupMessages({
   library(scRepertoire)
   library(ggraph)
 })
+
+# Baseline RNG seed for the session. Individual stochastic chunks (clonalNetwork)
+# are also seeded immediately before they run, so they remain reproducible when
+# executed in isolation.
+set.seed(42)
 
 ROOT_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github"
 
@@ -1063,6 +1068,7 @@ cluster of interest using `filter.identity`. This is useful for asking which
 other clusters share clones with, say, the GC or plasma cell population.
 
 ```{r clonal-network-all, fig.height=7, fig.width=9}
+set.seed(42)  # ensures reproducibility of clonalNetwork() force-directed layout (igraph is stochastic)
 # Full network -- all clusters
 p_net_all <- clonalNetwork(
   seu_scRep,
@@ -1085,6 +1091,7 @@ whichever cell type you want to examine. The plot will show only the
 connections involving that cluster.
 
 ```{r clonal-network-filtered, fig.height=7, fig.width=9}
+set.seed(42)  # ensures reproducibility of clonalNetwork() force-directed layout (igraph is stochastic)
 # Replace "PC" with your cluster of interest
 cluster_of_interest <- "PC"
 

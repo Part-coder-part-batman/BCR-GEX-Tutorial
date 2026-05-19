@@ -1,5 +1,5 @@
 ---
-title: "BCR + GEX Integration Tutorial — Part 1: BCR Sequence Processing"
+title: "BCR + GEX Integration Tutorial -- Part 1: BCR Sequence Processing"
 subtitle: "From Immcantation output to a clean, clone-annotated BCR table"
 author: "Nachi Nathan"
 date: "`r Sys.Date()`"
@@ -23,7 +23,6 @@ knitr::opts_chunk$set(
 ---
 
 # Prerequisites
-
 Before running this part of the tutorial, make sure the following are in place.
 
 **VDJ assignment completed**
@@ -38,11 +37,12 @@ covers installing Docker, pulling the Immcantation image, and running
 | File | Where it comes from |
 |------|-------------------|
 | `<sample>_airr_db-pass.tsv` | Output of `MakeDb.py` from the Docker step |
-| `filtered_contig_annotations.csv` | Cell Ranger VDJ output, at `per_sample_outs/<sample>/vdj_b/` |
+| `<sample>_filtered_contig_annotations.csv` | Cell Ranger VDJ output, at `per_sample_outs/<sample>/vdj_b/` |
 | IMGT germline reference (`human/vdj/`) | Downloaded via fetch_imgtdb.sh from the Immcantation repository (see instructions below) |
 
-**Downloading the IMGT germline reference**
+All input files for this tutorial are available on Zenodo: https://zenodo.org/records/20287324
 
+**Downloading the IMGT germline reference**
 Run the following commands in a terminal (not an R session) once before running
 the tutorial. This clones the Immcantation repository and downloads the
 formatted IMGT germline sequences to a folder of your choice.
@@ -68,7 +68,6 @@ BiocManager::install(c("airr", "alakazam", "dowser", "scoper", "shazam"))
 **R version:** This tutorial was developed under R 4.3. Any R 4.x version should work.
 
 ---
-
 # Overview
 
 This part of the tutorial covers BCR sequence processing using the Immcantation
@@ -116,7 +115,7 @@ BCR_FUNCTIONS_FILE <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutori
 # It should contain files like IGHV.fasta, IGHD.fasta, IGHJ.fasta, etc.
 IMGT_REF_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github/human/vdj"
 
-# Root directory — each sample has its own subfolder here
+# Root directory -- each sample has its own subfolder here
 ROOT_DIR <- "C:/Users/natha/OneDrive/Documents/Immcantation/BCR_Tutorial/Github"
 
 # Sample definitions
@@ -256,6 +255,11 @@ USER_THRESHOLD <- list(
 
 threshold_list <- list()
 
+# Set seed for reproducibility. SHazaM's GMM threshold fitting uses random
+# initialization internally, so seeding here ensures the auto thresholds are
+# bit-identical across runs.
+set.seed(42)
+
 for (s_id in names(bcr_list)) {
 
   thr_res   <- plot_clonal_thresholds(bcr_list[[s_id]],
@@ -293,6 +297,11 @@ when data from multiple samples are later combined -- no two clones from
 different samples can accidentally share an ID.
 
 ```{r clone-assignment}
+# Set seed for reproducibility. annotate_clone_ids() generates a short random
+# code as part of each clone ID (e.g. the "aB3x" in P1_LN_aB3x_14_G1M).
+# Without a seed, those codes change on every run.
+set.seed(42)
+
 for (s_id in names(bcr_list)) {
 
   bcr <- bcr_list[[s_id]]

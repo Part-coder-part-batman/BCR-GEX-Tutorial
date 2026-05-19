@@ -29,8 +29,8 @@ Before running this part, the following must be in place.
 
 | File | Where it comes from |
 |------|-------------------|
-| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
-| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20134219 |
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
 | `P1_LN_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
 | `P1_PT_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
 
@@ -821,6 +821,7 @@ run PCA, select PCs (fewest explaining 80% of variance, floor 10, ceiling 25),
 cluster, run UMAP, score cell cycle, generate a full panel of plots, save.
 
 ```{r solo-gex, fig.width=10, fig.height=7}
+set.seed(42)  # ensures reproducibility of RunPCA, FindNeighbors, FindClusters, RunUMAP, and CellCycleScoring across both samples
 var_expl           <- 0.8
 cluster_resolution <- 0.5
 seurat_list        <- list()
@@ -1123,6 +1124,7 @@ count layers but does not carry over the normalized data layer. The same IG/TCR
 variable gene exclusion from Step 5 is applied here.
 
 ```{r normalize-hvg-integrated}
+set.seed(42)  # ensures reproducibility of RunPCA on the merged object
 merged <- NormalizeData(merged, normalization.method = "LogNormalize",
                         scale.factor = 10000, verbose = FALSE)
 merged <- FindVariableFeatures(merged, selection.method = "vst",
@@ -1162,6 +1164,7 @@ correction. It is stored as `umap.unintegrated` and is not used in any downstrea
 analysis.
 
 ```{r umap-unintegrated}
+set.seed(42)  # ensures reproducibility of the pre-integration RunUMAP
 merged <- RunUMAP(merged, dims = 1:n_pc_m, reduction = "pca",
                   reduction.name = "umap.unintegrated", verbose = FALSE)
 
@@ -1180,6 +1183,7 @@ little effect but is still worth running.
 ## 6.6 RPCA integration
 
 ```{r integrate}
+set.seed(42)  # ensures reproducibility of IntegrateLayers (RPCA anchor finding is stochastic)
 options(future.globals.maxSize = 2000 * 1024^2)
 
 merged <- IntegrateLayers(
@@ -1201,6 +1205,7 @@ states for this dataset. If your clusters look heterogeneous on the DotPlot,
 try 0.7 or 1.0. If many clusters look identical, try 0.3 or 0.4.
 
 ```{r cluster-umap-integrated}
+set.seed(42)  # ensures reproducibility of FindNeighbors, FindClusters, and RunUMAP on the integrated embedding
 merged <- FindNeighbors(merged, dims = 1:n_pc_m,
                         reduction = "integrated.rpca", verbose = FALSE)
 merged <- FindClusters(merged, resolution = 0.5, verbose = FALSE)
@@ -1284,6 +1289,7 @@ Cell cycle phase was computed in Step 5 on the per-sample objects. We check
 whether it carried through the merge; if not, we score it here.
 
 ```{r cell-cycle-step7}
+set.seed(42)  # ensures reproducibility of CellCycleScoring if it runs here
 if (!"Phase" %in% colnames(obj@meta.data)) {
   message("Phase column not found -- scoring cell cycle on integrated object...")
   obj <- CellCycleScoring(obj, s.features = s.genes,
