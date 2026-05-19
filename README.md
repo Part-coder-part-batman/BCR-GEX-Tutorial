@@ -2,7 +2,7 @@
 
 A three-part R tutorial for single-cell BCR sequence processing and integration with gene expression data, using the Immcantation toolkit and Seurat.
 
-The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo: ([https://doi.org/10.5281/zenodo.20134219](https://zenodo.org/records/20134219))
+The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo: ([https://doi.org/10.5281/zenodo.20287324](https://zenodo.org/records/20287324))
 
 ---
 
@@ -30,7 +30,6 @@ The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph n
 - Shared clone analysis
 
 Standalone `.R` scripts are also provided for each step, for users who prefer working outside of R Markdown:
-
 - `00_Docker_Setup_and_VDJ_Assignment.md`
 - `01_BCR_Pipeline.R`
 - `02_GEX_QC.R`
@@ -58,7 +57,7 @@ Each part has a Prerequisites section listing exactly which input files are need
 
 ## Getting started
 
-1. Download data files from [Zenodo](https://zenodo.org/records/20134219)
+1. Download data files from [Zenodo](https://zenodo.org/records/20287324)
 2. Clone this repository
 3. Open `BCR_GEX_Tutorial_Part1.Rmd` in RStudio and update the paths chunk at the top
 4. Knit each part in order, or start from a later part using the Zenodo entry-point files
@@ -91,4 +90,3 @@ The following resources are required by the tutorial but must be obtained separa
 ## Citation
 
 Nathan et al., "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells," *Immunity* (2026).
-
