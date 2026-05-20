@@ -20,7 +20,7 @@ knitr::opts_chunk$set(
 )
 ```
 
----
+***
 
 # Prerequisites
 Before running this part of the tutorial, make sure the following are in place.
@@ -67,7 +67,7 @@ BiocManager::install(c("airr", "alakazam", "dowser", "scoper", "shazam"))
 
 **R version:** This tutorial was developed under R 4.3. Any R 4.x version should work.
 
----
+***
 # Overview
 
 This part of the tutorial covers BCR sequence processing using the Immcantation
@@ -96,7 +96,7 @@ The steps in this part are:
 6. **Repertoire overview** -- rank-abundance, clone size, and SHM plots to
    characterize each sample before moving to GEX.
 
----
+***
 
 # Setup
 
@@ -164,7 +164,7 @@ suppressPackageStartupMessages({
 source(BCR_FUNCTIONS_FILE)
 ```
 
----
+***
 
 # Step 1: BCR QC and Clonal Assignment
 
@@ -410,7 +410,7 @@ oligoclonal tumor repertoire -- is one of the central observations of the
 accompanying paper. In Parts 2 and 3 we will be able to ask which cell types
 the expanded tumor clones belong to.
 
----
+***
 
 *Part 1 complete. TSV files saved to the Output folder for each sample.
 Continue to Part 2 (BCR_GEX_Tutorial_Part2.Rmd) for GEX QC, integration,

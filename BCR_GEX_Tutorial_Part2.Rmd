@@ -1,5 +1,5 @@
 ---
-title: "BCR + GEX Integration Tutorial — Part 2: Seurat Analysis and Annotation"
+title: "BCR + GEX Integration Tutorial -- Part 2: Seurat Analysis and Annotation"
 subtitle: "From Cell Ranger GEX output to an annotated B cell Seurat object"
 author: "Nachi Nathan"
 date: "`r Sys.Date()`"
@@ -20,7 +20,7 @@ knitr::opts_chunk$set(
 )
 ```
 
----
+***
 
 # Prerequisites
 Before running this part, the following must be in place.
@@ -50,7 +50,7 @@ devtools::install_github("immunogenomics/presto")
 will not work with the `IntegrateLayers()` workflow used in Step 6.
 
 
----
+***
 
 # Overview
 
@@ -74,7 +74,7 @@ The steps are:
 6. **Cluster annotation** -- DotPlot, BCR metadata, DEG analysis, final label
    assignment.
 
----
+***
 
 # Setup
 
@@ -121,7 +121,7 @@ samples <- list(
 message("Ready. Samples: ", paste(names(samples), collapse = ", "))
 ```
 
----
+***
 
 # Step 2: GEX QC and Filtering
 
@@ -363,7 +363,7 @@ for (s in samples) {
 }
 ```
 
----
+***
 
 # Step 3: Doublet Removal and B Cell Enrichment
 
@@ -495,7 +495,7 @@ for (s in samples) {
 }
 ```
 
----
+***
 
 # Step 4: Adding BCR Metadata
 
@@ -728,7 +728,7 @@ a balanced distribution across isotypes while P1_PT is dominated by IgG1 --
 a single panel that captures the core immunological difference between the two
 tissue compartments.
 
----
+***
 
 # Step 5: Solo GEX Analysis
 
@@ -1054,7 +1054,7 @@ cell and atypical memory populations, a proliferating cluster, and large
 antigen-driven clones. This contrast is one of the central findings of the paper
 and is fully visible at this pre-integration stage.
 
----
+***
 
 # Step 6: Integration
 
@@ -1265,7 +1265,7 @@ message("Saved: ", rds_out_s6)
 message("Cells: ", ncol(merged), " | Clusters: ", length(unique(merged$seurat_clusters)))
 ```
 
----
+***
 
 # Step 7: Cluster Annotation
 
@@ -1955,7 +1955,7 @@ confidence of their annotation. A larger cohort would be needed to fully
 characterize these populations. The annotations here are a guide and a starting
 point, not a definitive biological conclusion.
 
----
+***
 
 # Save
 
@@ -1967,7 +1967,7 @@ message("Cell types: ", paste(sort(unique(obj$cell_type)), collapse = ", "))
 message("Cells: ", ncol(obj))
 ```
 
----
+***
 
 *Part 2 complete. Annotated Seurat object saved to `RDS_Objects/`. Continue to
 Part 3 (BCR_GEX_Tutorial_Part3.Rmd) for BCR visualization and shared clone

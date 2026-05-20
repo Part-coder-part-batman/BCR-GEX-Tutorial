@@ -2,19 +2,19 @@
 # BCR_functions.R
 # Helper functions for BCR QC, clonal assignment, and mutation analysis
 #
-# These functions are sourced by 01_BCR_Pipeline.R — do not run this file
+# These functions are sourced by BCR_GEX_Tutorial_Part1.Rmd -- do not run this file
 # directly. All required packages are loaded by the pipeline script.
 #
 # Functions in this file (in order of use):
-#   1. process_bcr_data()                    — load AIRR TSV + Cell Ranger annotations
-#   2. filter_bcr_data()                     — QC filtering: productive, paired, deduplicated
-#   3. plot_clonal_thresholds()              — compute and visualize clonal threshold
-#   4. define_clones_basic()                 — hierarchical clonal assignment
-#   5. annotate_clone_ids()                  — human-readable clone ID encoding
-#   6. qc_clone_assignment()                 — verify clone assignment output
-#   7. visualize_clones()                    — rank-abundance, size, diversity plots
-#   8. reconstruct_germlines_and_mutations() — germline reconstruction + SHM
-#   9. plot_mutation_frequencies()           — mutation frequency plots
+#   1. process_bcr_data()                    -- load AIRR TSV + Cell Ranger annotations
+#   2. filter_bcr_data()                     -- QC filtering: productive, paired, deduplicated
+#   3. plot_clonal_thresholds()              -- compute and visualize clonal threshold
+#   4. define_clones_basic()                 -- hierarchical clonal assignment
+#   5. annotate_clone_ids()                  -- human-readable clone ID encoding
+#   6. qc_clone_assignment()                 -- verify clone assignment output
+#   7. visualize_clones()                    -- rank-abundance, size, diversity plots
+#   8. reconstruct_germlines_and_mutations() -- germline reconstruction + SHM
+#   9. plot_mutation_frequencies()           -- mutation frequency plots
 # =============================================================================
 
 
@@ -148,7 +148,7 @@ filter_bcr_data <- function(bcr_data) {
   message("  Remaining: ", nrow(bcr_data))
 
   # ---- Step 4: Retain highest-UMI light chain per cell ----------------------
-  message("Step 4: Collapsing multiple light chains — keeping highest UMI per cell...")
+  message("Step 4: Collapsing multiple light chains -- keeping highest UMI per cell...")
   light <- bcr_data %>%
     dplyr::filter(locus %in% c("IGK", "IGL")) %>%
     dplyr::group_by(cell_id) %>%
@@ -221,7 +221,7 @@ plot_clonal_thresholds <- function(bcr_data, user_defined_threshold = NULL, binw
   dist_nearest <- shazam::distToNearest(dplyr::filter(bcr_data, locus == "IGH"))
 
   if (all(is.na(dist_nearest$dist_nearest))) {
-    stop("All dist_nearest values are NA — check that IGH sequences are present.")
+    stop("All dist_nearest values are NA -- check that IGH sequences are present.")
   }
 
   # ---- Plot 1: Histogram with optional user threshold -----------------------
@@ -464,7 +464,11 @@ qc_clone_assignment <- function(bcr_data, results) {
   message("  Cells lost:                     ", n_start - n_final)
 
   # Clone ID format check
-  format_ok <- all(stringr::str_count(results$clone_id, "_") == 3)
+  # Format is SAMPLEID_RANDOMCODE_SIZE_ISOTYPES. The sample ID can itself
+  # contain underscores (e.g. "P1_LN"), so counting underscores is unreliable.
+  # Match the invariant tail instead: a 4-character code, then the numeric
+  # size, then the isotype field.
+  format_ok <- all(grepl("_[A-Za-z0-9]{4}_[0-9]+_[^_]+$", results$clone_id))
   if (format_ok) {
     message("  Clone ID format: OK (SAMPLEID_RANDOM_SIZE_ISOTYPES)")
   } else {
@@ -472,9 +476,14 @@ qc_clone_assignment <- function(bcr_data, results) {
   }
 
   # Encoded size vs actual size
+  # Extract the numeric size field directly. It is the digit run immediately
+  # preceded by an underscore and immediately followed by the final isotype
+  # field, so this is robust to underscores inside the sample ID.
   results <- results %>%
     dplyr::mutate(
-      clone_size_encoded = as.numeric(stringr::str_split_fixed(clone_id, "_", 4)[, 3])
+      clone_size_encoded = as.numeric(
+        stringr::str_extract(clone_id, "(?<=_)[0-9]+(?=_[^_]+$)")
+      )
     )
 
   size_check <- results %>%
@@ -486,7 +495,9 @@ qc_clone_assignment <- function(bcr_data, results) {
       .groups      = "drop"
     )
 
-  mismatches <- dplyr::filter(size_check, !match)
+  # Count an unparseable size (NA) as a mismatch rather than dropping it,
+  # so a malformed clone ID surfaces here instead of passing silently.
+  mismatches <- dplyr::filter(size_check, !match | is.na(match))
   if (nrow(mismatches) == 0) {
     message("  Encoded clone sizes match actual sizes: OK")
   } else {

@@ -20,7 +20,7 @@ knitr::opts_chunk$set(
 )
 ```
 
----
+***
 
 # Prerequisites
 Before running this part, the following must be in place.
@@ -65,7 +65,7 @@ BiocManager::install("scRepertoire")
 BiocManager::install("ggtree")
 ```
 
----
+***
 
 # Overview
 
@@ -80,7 +80,7 @@ The dataset comes from Nathan et al., *Immunity* (2026). The two samples used
 throughout this tutorial -- P1_LN and P1_PT -- are the lymph node and primary
 tumor from the same ovarian cancer patient.
 
----
+***
 
 # Setup
 
@@ -137,11 +137,11 @@ dir.create(rds_dir,  recursive = TRUE, showWarnings = FALSE)
 message("Ready.")
 ```
 
----
+***
 
 # Step 8: BCR Visualization
 
----
+***
 
 ## 8.1 Load the annotated Seurat object and extract cell type labels
 
@@ -184,7 +184,7 @@ message("Cell type distribution:")
 print(table(cell_type_map$cell_type))
 ```
 
----
+***
 
 ## 8.2 Join cell type onto BCR data
 
@@ -270,7 +270,7 @@ for (sid in names(bcr_tsv)) {
 }
 ```
 
----
+***
 
 ### 8.2a Save the annotated long-format BCR data
 
@@ -287,7 +287,7 @@ for (sid in names(bcr_annotated)) {
 }
 ```
 
----
+***
 
 ### 8.2b Build and save the wide-format summary table
 
@@ -350,7 +350,7 @@ for (sid in names(bcr_annotated)) {
 }
 ```
 
----
+***
 
 ## 8.3 Donut plots
 
@@ -381,7 +381,7 @@ Three levels of granularity are shown:
   lowest clonality -- near-zero expansion is expected for this population. GC
   clusters can also show substantial expansion. MBC subsets vary.
 
----
+***
 
 ### 8.3.1 Combined donut -- P1_LN
 
@@ -390,7 +390,7 @@ donuts_ln <- plot_combined_donut(bcr_annotated[["P1_LN"]], sample_name = "P1_LN"
 print(donuts_ln$all_clones)
 ```
 
----
+***
 
 ### 8.3.2 Combined donut -- P1_PT
 
@@ -399,7 +399,7 @@ donuts_pt <- plot_combined_donut(bcr_annotated[["P1_PT"]], sample_name = "P1_PT"
 print(donuts_pt$all_clones)
 ```
 
----
+***
 
 ### 8.3.3 Per-isotype donuts -- P1_LN
 
@@ -416,7 +416,7 @@ for (iso in names(iso_donuts_ln)) {
 }
 ```
 
----
+***
 
 ### 8.3.4 Per-isotype donuts -- P1_PT
 
@@ -428,7 +428,7 @@ for (iso in names(iso_donuts_pt)) {
 }
 ```
 
----
+***
 
 ### 8.3.5 Per-cluster donuts -- P1_LN
 
@@ -447,7 +447,7 @@ for (cl in names(cluster_donuts_ln)) {
 }
 ```
 
----
+***
 
 ### 8.3.6 Per-cluster donuts -- P1_PT
 
@@ -463,7 +463,7 @@ for (cl in names(cluster_donuts_pt)) {
 }
 ```
 
----
+***
 
 ## 8.4 Phylogenetic trees
 
@@ -490,7 +490,7 @@ We build trees for the top 5 expanded clones per sample by default. You can
 change `top_n` or supply specific clone IDs via `clone_ids` to inspect
 particular clones of interest.
 
----
+***
 
 ### 8.4a Cluster color palette
 
@@ -511,7 +511,7 @@ cluster_colors <- c(
 )
 ```
 
----
+***
 
 ### 8.4.1 Trees -- P1_LN
 
@@ -535,7 +535,7 @@ for (cid in names(tree_plots_ln)) {
 }
 ```
 
----
+***
 
 ### 8.4.2 Trees -- P1_PT
 
@@ -555,7 +555,7 @@ for (cid in names(tree_plots_pt)) {
 }
 ```
 
----
+***
 
 ### 8.4.3 Building a tree for a specific clone
 
@@ -579,7 +579,7 @@ tree_specific <- build_bcr_trees(
 print(tree_specific[[target_clone]])
 ```
 
----
+***
 
 ### 8.4.4 Save tree plots to PDF
 
@@ -602,7 +602,7 @@ for (sid in c("P1_LN", "P1_PT")) {
 message("All tree plots saved.")
 ```
 
----
+***
 
 # Step 9: Cross-Sample Clonal Analysis with scRepertoire
 
@@ -624,7 +624,7 @@ designed for cross-sample comparison where you do not want to re-run Immcantatio
 on the combined data. Do not replace the Immcantation clone IDs with CTstrict
 for within-sample analyses -- they serve different purposes.
 
----
+***
 
 ## 9.1 Prepare AIRR data for scRepertoire
 
@@ -723,14 +723,14 @@ saveRDS(combined_BCR, file.path(rds_dir, "combined_BCR_S9.rds"))
 message("Saved: combined_BCR_S9.rds")
 ```
 
----
+***
 
 ## 9.2 Repertoire-level characterization
 
 Before looking at shared clones, we characterize each sample's repertoire
 structure independently.
 
----
+***
 
 ### 9.2.1 Clonal homeostasis
 
@@ -760,7 +760,7 @@ ggsave(file.path(plot_dir, "clonal_homeostasis.pdf"),
 message("Saved: clonal_homeostasis.pdf")
 ```
 
----
+***
 
 ## 9.3 Quantify shared clones
 
@@ -789,7 +789,7 @@ string used to compare them is formatted differently. To exactly reproduce the
 counts shown here, pin scRepertoire to v1.12.0. Otherwise small numeric
 differences are expected and do not reflect a bug.
 
----
+***
 
 ### 9.3.1 Build the CTstrict lookup
 
@@ -818,7 +818,7 @@ message("Example cell_id values after stripping:")
 print(head(ct_lookup$cell_id, 6))
 ```
 
----
+***
 
 ### 9.3.2 Join CTstrict onto the master BCR table
 
@@ -864,7 +864,7 @@ data.table::fwrite(bcr_all,
 message("Saved: All_S9_bcr_with_CTstrict.tsv")
 ```
 
----
+***
 
 ### 9.3.3 Count shared clones and cells
 
@@ -917,7 +917,7 @@ message("\nShared clone table (top 10):")
 print(knitr::kable(head(shared_clone_tbl, 10), caption = "Top 10 shared clones by total cell count"))
 ```
 
----
+***
 
 ### 9.3.4 Visualize shared vs. exclusive cell counts
 
@@ -963,7 +963,7 @@ ggsave(file.path(plot_dir, "shared_cells_bar_P1.pdf"),
 message("Saved: shared_cells_bar_P1.pdf")
 ```
 
----
+***
 
 ## 9.4 Attach clonal data to the Seurat object
 
@@ -1051,11 +1051,11 @@ saveRDS(seu_scRep, file.path(rds_dir, "integrated_S9_scRep.rds"))
 message("Saved: integrated_S9_scRep.rds")
 ```
 
----
+***
 
 ## 9.5 Single-cell visualizations
 
----
+***
 
 ### 9.5.1 Clonal network on UMAP
 
@@ -1112,7 +1112,7 @@ ggsave(file.path(plot_dir,
 message("Saved: clonal_network_", cluster_of_interest, ".pdf")
 ```
 
----
+***
 
 ### 9.5.2 Clonal occupancy by cluster
 
@@ -1166,7 +1166,7 @@ ggsave(file.path(plot_dir, "clonal_occupy_proportion.pdf"),
 message("Saved: clonal_occupy_counts.pdf and clonal_occupy_proportion.pdf")
 ```
 
----
+***
 
 ## 9.6 Shared clone dot plot
 
@@ -1182,7 +1182,7 @@ at top). Each column is a cell type cluster. Each dot encodes three things:
 Only clones with at least one cell in both LN and PT (after restricting to
 cells with a valid `cell_type` annotation) are shown.
 
----
+***
 
 ### 9.6a Color palette and helper functions
 
@@ -1217,7 +1217,7 @@ pick_dominant_isotype <- function(x) {
 }
 ```
 
----
+***
 
 ### 9.6b Build the plot data
 
@@ -1290,7 +1290,7 @@ message("Plot data: ", dplyr::n_distinct(plot_df$CTstrict),
         " clones x ", dplyr::n_distinct(plot_df$cell_type), " clusters")
 ```
 
----
+***
 
 ### 9.6c Build and save the plot
 
@@ -1352,7 +1352,7 @@ ggsave(file.path(plot_dir, "shared_clones_dotplot_P1.pdf"),
 message("Saved: shared_clones_dotplot_P1.pdf")
 ```
 
----
+***
 
 # Going further -- other scRepertoire analyses
 
@@ -1416,7 +1416,7 @@ vizCirclize(seu_scRep, group.by = "cell_type")
 For complete documentation and examples see the scRepertoire vignettes at
 https://www.borch.dev/uploads/screpertoire/.
 
----
+***
 
 # Summary
 
@@ -1438,7 +1438,7 @@ https://www.borch.dev/uploads/screpertoire/.
 | `Plots/Part3/clonal_occupy_proportion.pdf` | occupiedscRepertoire -- proportions |
 | `Plots/Part3/shared_clones_dotplot_P1.pdf` | Shared clone dot plot -- Patient 1 |
 
----
+***
 
 *Part 3 complete. All BCR analysis outputs (per-sample annotation, clonal trees,
 cross-sample sharing) and GEX outputs (integration, cell type annotation, UMAP)
