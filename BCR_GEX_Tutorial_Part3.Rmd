@@ -29,9 +29,9 @@ Before running this part, the following must be in place.
 
 | File | Where it comes from |
 |------|-------------|
-| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
-| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
-| `integrated_S7_annotated.rds` | Part 2 output, or download from Zenodo: https://zenodo.org/records/20287324 |
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20324083 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20324083 |
+| `integrated_S7_annotated.rds` | Part 2 output, or download from Zenodo: https://zenodo.org/records/20324083 |
 | `BCR_viz_functions.R` | This tutorial repo, at `ROOT_DIR/` |
 
 **IQ-TREE 2 (required for phylogenetic trees only)**

@@ -29,10 +29,10 @@ Before running this part, the following must be in place.
 
 | File | Where it comes from |
 |------|-------------------|
-| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
-| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20287324 |
-| `P1_LN_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
-| `P1_PT_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, at `per_sample_outs/<sample>/count/` |
+| `P1_LN_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20324083 |
+| `P1_PT_bcr_data.tsv` | Part 1 output, or download from Zenodo: https://zenodo.org/records/20324083 |
+| `P1_LN_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, or download from Zenodo: https://zenodo.org/records/20323951
+| `P1_PT_sample_filtered_feature_bc_matrix.h5` | Cell Ranger GEX output, or download from Zenodo: https://zenodo.org/records/20323951
 
 **R packages required**
 
@@ -1200,7 +1200,7 @@ message("Integration complete. Layers rejoined.")
 
 ## 6.7 Cluster and UMAP on integrated embedding
 
-Resolution 0.5 produces 11 clusters that map cleanly onto recognizable B cell
+Resolution 0.5 produces 10 clusters that map cleanly onto recognizable B cell
 states for this dataset. If your clusters look heterogeneous on the DotPlot,
 try 0.7 or 1.0. If many clusters look identical, try 0.3 or 0.4.
 
@@ -1326,7 +1326,7 @@ print(
 
 The DotPlot is the primary annotation tool. Read it row by row and look for the marker group that lights up. Pay attention to both dot size (percent expressing) and color (average expression level). This is the first pass. Several clusters will be immediately classifiable, while others will need additional evidence from BCR metadata and DEG analysis.
 
-Clusters 0, 1, and 6 express memory B cell markers (CD27, CD24, TNFSF13B). Clusters 0 and 6 share this profile with no other distinguishing markers between them and will need DEG analysis to separate. Cluster 1 stands out with FCRL4, FCRL5, and a clear interferon signature (IFIT1, IFIT3, IFI44, MX1), consistent with atypical memory B cells. IFN and stress signaling are known drivers of the atypical MBC program in the literature, which is why these features co-occur in the same population.
+Clusters 0, 1, and 6 express memory B cell markers (CD27, CD24, TNFRSF13B). Clusters 0 and 6 share this profile with no other distinguishing markers between them and will need DEG analysis to separate. Cluster 1 stands out with FCRL4, FCRL5, and a clear interferon signature (IFIT1, IFIT3, IFI44, MX1), consistent with atypical memory B cells. IFN and stress signaling are known drivers of the atypical MBC program in the literature, which is why these features co-occur in the same population.
 
 Cluster 2 is unambiguous naive: TCL1A, IGHD, IGHM, and IL4R.
 

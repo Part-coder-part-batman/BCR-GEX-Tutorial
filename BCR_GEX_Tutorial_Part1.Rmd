@@ -40,7 +40,7 @@ covers installing Docker, pulling the Immcantation image, and running
 | `<sample>_filtered_contig_annotations.csv` | Cell Ranger VDJ output, at `per_sample_outs/<sample>/vdj_b/` |
 | IMGT germline reference (`human/vdj/`) | Downloaded via fetch_imgtdb.sh from the Immcantation repository (see instructions below) |
 
-All input files for this tutorial are available on Zenodo: https://zenodo.org/records/20287324
+All input files for this tutorial are available on Zenodo: https://zenodo.org/records/20323951
 
 **Downloading the IMGT germline reference**
 Run the following commands in a terminal (not an R session) once before running
