@@ -85,7 +85,7 @@ max_UMI      <- 35000
 filter_mt    <- 10
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -146,17 +146,17 @@ for (s in samples) {
             features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
             pt.size  = 0.1,
             ncol     = 3) &
-      ggplot2::labs(title = paste0(sample_name, " — QC metrics (pre-filter)"))
+      ggplot2::labs(title = paste0(sample_name, " -- QC metrics (pre-filter)"))
   )
 
   print(
     FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mt") +
-      ggplot2::ggtitle(paste0(sample_name, " — UMI vs mt%"))
+      ggplot2::ggtitle(paste0(sample_name, " -- UMI vs mt%"))
   )
 
   print(
     FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
-      ggplot2::ggtitle(paste0(sample_name, " — UMI vs genes detected"))
+      ggplot2::ggtitle(paste0(sample_name, " -- UMI vs genes detected"))
   )
 
   pre_stats <- data.frame(
@@ -212,7 +212,7 @@ for (s in samples) {
             features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
             pt.size  = 0.1,
             ncol     = 3) &
-      ggplot2::labs(title = paste0(sample_name, " — QC metrics (post-filter)"))
+      ggplot2::labs(title = paste0(sample_name, " -- QC metrics (post-filter)"))
   )
 
 

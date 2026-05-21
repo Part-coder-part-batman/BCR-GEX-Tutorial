@@ -16,8 +16,8 @@
 #       Saved to the full path you provide as rds_out in the sample definitions.
 #
 # WHAT THIS SCRIPT DOES:
-#   Step 1 — Keeps only B cells by filtering for CD79A > 0 in the counts layer
-#   Step 2 — Removes likely doublets: CD79A+ cells that also express a non-B
+#   Step 1 -- Keeps only B cells by filtering for CD79A > 0 in the counts layer
+#   Step 2 -- Removes likely doublets: CD79A+ cells that also express a non-B
 #             cell marker (T cell, myeloid, or NK cell markers)
 #
 # SEURAT VERSION NOTE:
@@ -62,7 +62,7 @@ samples <- list(
 )
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -132,7 +132,7 @@ for (s in samples) {
     cd79a <- FetchData(obj, vars = "CD79A", layer = "counts")[[1]]
     rownames(obj@meta.data)[cd79a > 0]
   }, error = function(e) {
-    message("  WARNING: CD79A not found in this object — skipping B cell filter.")
+    message("  WARNING: CD79A not found in this object -- skipping B cell filter.")
     return(colnames(obj))
   })
 

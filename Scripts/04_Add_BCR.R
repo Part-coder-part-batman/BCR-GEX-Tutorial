@@ -28,14 +28,14 @@
 #   - BCR+ vs BCR- fraction per sample (percentage stacked bar)
 #   - Isotype distribution per sample (percentage bar chart, BCR+ cells only)
 #
-# NOTE — BARCODE MATCHING:
+# NOTE -- BARCODE MATCHING:
 #   Cell barcodes in the Seurat object were suffixed with the sample name in
 #   step 02 (e.g. ACGT...TGCA-1_MySample1). The BCR TSV cell_id column must
 #   use the same suffix. If you used 01_BCR_Pipeline.R this was done
 #   automatically. If match rates are unexpectedly low (<30%), check that
 #   the suffixes are consistent between the two pipelines.
 #
-# NOTE — BCR- CELLS:
+# NOTE -- BCR- CELLS:
 #   Cells with BCR = FALSE are genuine B cells (CD79A+) that did not yield a
 #   detectable BCR sequence. They are kept in the object and will contribute
 #   to GEX analysis. All BCR metadata columns are NA for these cells.
@@ -82,7 +82,7 @@ samples <- list(
 )
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -126,7 +126,7 @@ for (s in samples) {
   dup_heavy  <- heavy_rows %>% dplyr::count(cell_id) %>% dplyr::filter(n > 1)
 
   if (nrow(dup_heavy) > 0) {
-    warning("  ", nrow(dup_heavy), " cells have >1 heavy chain — keeping highest UMI.",
+    warning("  ", nrow(dup_heavy), " cells have >1 heavy chain -- keeping highest UMI.",
             " This should have been resolved in 01_BCR_Pipeline.R.")
     heavy_rows <- heavy_rows %>%
       dplyr::group_by(cell_id) %>%
@@ -140,7 +140,7 @@ for (s in samples) {
   dup_light  <- light_rows %>% dplyr::count(cell_id) %>% dplyr::filter(n > 1)
 
   if (nrow(dup_light) > 0) {
-    warning("  ", nrow(dup_light), " cells have >1 light chain — keeping highest UMI.")
+    warning("  ", nrow(dup_light), " cells have >1 light chain -- keeping highest UMI.")
     light_rows <- light_rows %>%
       dplyr::group_by(cell_id) %>%
       dplyr::slice_max(umi_count, n = 1, with_ties = FALSE) %>%

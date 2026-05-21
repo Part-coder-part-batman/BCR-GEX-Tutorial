@@ -28,11 +28,11 @@
 #   - integrated_S7_annotated.rds   Seurat object with cell_type metadata
 #   - DEG TSV files saved to deg_save_dir (Part B)
 #
-# NOTE — SMALL CLUSTERS:
+# NOTE -- SMALL CLUSTERS:
 #   Clusters with fewer than ~100 cells should be interpreted with caution.
 #   Statistical power for both clustering and DEGs is limited at this size.
 #
-# NOTE — PRESTO:
+# NOTE -- PRESTO:
 #   FindAllMarkers() is slow by default. For a significant speed improvement:
 #     install.packages("devtools")
 #     devtools::install_github("immunogenomics/presto")
@@ -95,7 +95,7 @@ cluster_annotations <- c(
 )
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -175,10 +175,10 @@ Idents(obj) <- "seurat_clusters"
 
 
 # =============================================================================
-# PART A — ANNOTATION PLOTS
+# PART A -- ANNOTATION PLOTS
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART A — Annotation plots")
+message("PART A -- Annotation plots")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -188,7 +188,7 @@ message("Plot A1: UMAP by cluster and sample...")
 print(
   DimPlot(obj, reduction = "umap", label = TRUE, label.size = 5, repel = TRUE) +
     scale_color_hue(labels = paste0(names(num_clusters), "  (n=", num_clusters, ")")) +
-    ggtitle("Integrated UMAP — Clusters") +
+    ggtitle("Integrated UMAP -- Clusters") +
     theme(plot.title = element_text(hjust = 0.5),
           legend.text = element_text(size = 9))
 )
@@ -197,7 +197,7 @@ sample_col <- if ("sample_id" %in% colnames(obj@meta.data)) "sample_id" else "or
 print(
   DimPlot(obj, reduction = "umap", group.by = sample_col,
           label = FALSE, pt.size = 0.8) +
-    ggtitle("Integrated UMAP — Sample") +
+    ggtitle("Integrated UMAP -- Sample") +
     theme(plot.title = element_text(hjust = 0.5))
 )
 
@@ -231,7 +231,7 @@ print(
   DotPlot(obj, features = markers_present,
           cols = c("gray90", "red"), dot.scale = 6) +
     RotatedAxis() +
-    ggtitle("B cell marker panel — integrated clusters") +
+    ggtitle("B cell marker panel -- integrated clusters") +
     theme(axis.text.x = element_text(size = 8))
 )
 
@@ -266,7 +266,7 @@ if ("c_call" %in% colnames(obj@meta.data)) {
       DimPlot(obj_bcr, group.by = "c_call", label = FALSE, pt.size = 0.8,
               cols = isotype_colors[present_iso],
               order = rev(present_iso)) +
-        ggtitle("Integrated UMAP — Isotype (BCR+ cells)")
+        ggtitle("Integrated UMAP -- Isotype (BCR+ cells)")
     )
   }
 
@@ -300,7 +300,7 @@ if ("mu_freq_H" %in% colnames(obj@meta.data)) {
                 order = TRUE, pt.size = 0.8) +
       scale_color_gradientn(colors = c("#FFFFCC", "#41B6C4", "#0C2C84"),
                             na.value = "grey90") +
-      ggtitle("Integrated UMAP — SHM frequency, heavy chain")
+      ggtitle("Integrated UMAP -- SHM frequency, heavy chain")
   )
 
   shm_df <- obj@meta.data %>%
@@ -322,7 +322,7 @@ if ("clone_count" %in% colnames(obj@meta.data)) {
                 order = TRUE, pt.size = 0.8) +
       scale_color_gradientn(colors = c("#FFFFCC", "#FD8D3C", "#800026"),
                             na.value = "grey90") +
-      ggtitle("Integrated UMAP — Clone size")
+      ggtitle("Integrated UMAP -- Clone size")
   )
 }
 
@@ -377,7 +377,7 @@ Idents(obj) <- "Phase"
 print(
   DimPlot(obj, reduction = "umap", label = FALSE, pt.size = 0.8,
           cols = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
-    ggtitle("Integrated UMAP — Cell cycle phase")
+    ggtitle("Integrated UMAP -- Cell cycle phase")
 )
 Idents(obj) <- "seurat_clusters"
 
@@ -483,13 +483,13 @@ message("\nPart A complete. Review all plots, then run Part B and/or Part C.")
 
 
 # =============================================================================
-# PART B — DEG FINDER
+# PART B -- DEG FINDER
 # =============================================================================
 # Change deg_mode / cluster_A / cluster_B in the USER SETTINGS above,
 # then re-source from here to run different comparisons.
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART B — DEG finder (mode: ", deg_mode, ")")
+message("PART B -- DEG finder (mode: ", deg_mode, ")")
 message(paste(rep("=", 60), collapse = ""))
 
 if (!dir.exists(deg_save_dir)) dir.create(deg_save_dir, recursive = TRUE)
@@ -589,10 +589,10 @@ if (deg_mode == "all_clusters") {
 
 
 # =============================================================================
-# PART C — ASSIGN ANNOTATIONS AND SAVE
+# PART C -- ASSIGN ANNOTATIONS AND SAVE
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART C — Assigning annotations and saving")
+message("PART C -- Assigning annotations and saving")
 message(paste(rep("=", 60), collapse = ""))
 
 # Validate coverage
@@ -643,7 +643,7 @@ Idents(obj) <- "cell_type_label"
 print(
   DimPlot(obj, reduction = "umap", label = TRUE, label.size = 3.5,
           repel = TRUE) +
-    ggtitle("Integrated UMAP — Annotated (diagnostic)") +
+    ggtitle("Integrated UMAP -- Annotated (diagnostic)") +
     theme(plot.title  = element_text(hjust = 0.5),
           legend.text = element_text(size = 8)) +
     NoLegend()
@@ -653,7 +653,7 @@ Idents(obj) <- "cell_type"
 print(
   DimPlot(obj, reduction = "umap", label = TRUE, label.size = 4,
           repel = TRUE) +
-    ggtitle("Integrated UMAP — Cell types") +
+    ggtitle("Integrated UMAP -- Cell types") +
     theme(plot.title = element_text(hjust = 0.5)) +
     guides(color = guide_legend(override.aes = list(size = 4)))
 )

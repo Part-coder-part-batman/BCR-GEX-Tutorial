@@ -24,7 +24,7 @@
 #   for evaluating integration quality and inspecting the joint cluster
 #   structure.
 #
-# NOTE — INTEGRATION METHOD:
+# NOTE -- INTEGRATION METHOD:
 #   This script uses RPCA by default. It is the right choice for same-platform
 #   same-experiment data. For more divergent datasets (different conditions,
 #   different tissues, many samples) consider CCA or Harmony. To switch,
@@ -34,12 +34,12 @@
 #     Harmony : method = HarmonyIntegration, new.reduction = "harmony"
 #   Then update the reduction name in FindNeighbors() and RunUMAP() to match.
 #
-# NOTE — IG/TCR GENE EXCLUSION:
+# NOTE -- IG/TCR GENE EXCLUSION:
 #   V(D)J variable gene transcripts are excluded from HVG selection for the
 #   same reason as in step 05: their variability reflects clonal diversity,
 #   not cell state. They are NOT removed from the object.
 #
-# NOTE — SEURAT VERSION:
+# NOTE -- SEURAT VERSION:
 #   Requires Seurat v5. Uses the IntegrateLayers() framework with per-sample
 #   RNA layers. Not compatible with Seurat v4.
 # =============================================================================
@@ -92,7 +92,7 @@ var_expl <- 0.8
 cluster_resolution <- 0.5
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -165,7 +165,7 @@ for (s in samples) {
   obj            <- readRDS(s$rds_in)
   obj$sample_id  <- s$name
   seurat_list[[s$name]] <- obj
-  message("  Loaded: ", s$name, " — ", ncol(obj), " cells | ", nrow(obj), " genes")
+  message("  Loaded: ", s$name, " -- ", ncol(obj), " cells | ", nrow(obj), " genes")
 }
 
 
@@ -206,7 +206,7 @@ n_excluded       <- length(intersect(genes_to_exclude, VariableFeatures(merged))
 hvg_filtered     <- setdiff(VariableFeatures(merged), genes_to_exclude)
 
 if (length(hvg_filtered) < 50) {
-  warning("Fewer than 50 HVGs after IG/TCR filtering — using unfiltered HVG list.")
+  warning("Fewer than 50 HVGs after IG/TCR filtering -- using unfiltered HVG list.")
   hvg_filtered <- VariableFeatures(merged)
 }
 
@@ -235,7 +235,7 @@ message("  PCs selected: ", n_pc,
 
 print(
   ElbowPlot(merged, ndims = 25) +
-    ggtitle("Elbow plot — merged unintegrated") +
+    ggtitle("Elbow plot -- merged unintegrated") +
     geom_vline(xintercept = n_pc, linetype = "dashed", color = "red") +
     labs(caption = paste0("Red dashed line = PC ", n_pc,
                           " (", round(100 * cum_var[n_pc], 1),
@@ -254,7 +254,7 @@ merged <- RunUMAP(merged, dims = 1:n_pc, reduction = "pca",
 print(
   DimPlot(merged, reduction = "umap.unintegrated", group.by = "sample_id",
           pt.size = 0.8) +
-    ggtitle("UMAP — Unintegrated (colored by sample)") +
+    ggtitle("UMAP -- Unintegrated (colored by sample)") +
     theme(plot.title = element_text(hjust = 0.5))
 )
 
@@ -301,7 +301,7 @@ message("\nGenerating plots...")
 # --- 9a. Integrated UMAP colored by sample ---
 print(
   DimPlot(merged, reduction = "umap", group.by = "sample_id", pt.size = 0.8) +
-    ggtitle("UMAP — Integrated (colored by sample)") +
+    ggtitle("UMAP -- Integrated (colored by sample)") +
     theme(plot.title = element_text(hjust = 0.5))
 )
 
@@ -310,7 +310,7 @@ num_clusters <- table(merged$seurat_clusters)
 print(
   DimPlot(merged, reduction = "umap", label = TRUE, repel = TRUE, pt.size = 0.8) +
     scale_color_hue(labels = paste0(names(num_clusters), " (", num_clusters, ")")) +
-    ggtitle(paste0("UMAP — Integrated clusters (res = ", cluster_resolution, ")")) +
+    ggtitle(paste0("UMAP -- Integrated clusters (res = ", cluster_resolution, ")")) +
     theme(legend.text = element_text(size = 9))
 )
 
@@ -336,7 +336,7 @@ print(
   DotPlot(merged, features = markers_present,
           cols = c("gray90", "red"), dot.scale = 6) +
     RotatedAxis() +
-    ggtitle("B cell marker panel — integrated clusters") +
+    ggtitle("B cell marker panel -- integrated clusters") +
     theme(axis.text.x = element_text(size = 8))
 )
 
@@ -355,7 +355,7 @@ if (length(markers_for_feature) > 0) {
 }
 
 # --- 9f. BCR overlay plots (only if BCR metadata present) ---
-# c_call is added by 04_Add_BCR.R — if it is absent, BCR overlay plots are skipped.
+# c_call is added by 04_Add_BCR.R -- if it is absent, BCR overlay plots are skipped.
 if ("c_call" %in% colnames(merged@meta.data)) {
 
   # Isotype UMAP
@@ -367,7 +367,7 @@ if ("c_call" %in% colnames(merged@meta.data)) {
       DimPlot(obj_bcr, group.by = "c_call", label = FALSE, pt.size = 0.8,
               cols = isotype_colors[present_iso],
               order = rev(present_iso)) +
-        ggtitle("Integrated UMAP — Isotype (BCR+ cells)")
+        ggtitle("Integrated UMAP -- Isotype (BCR+ cells)")
     )
   }
 
@@ -378,7 +378,7 @@ if ("c_call" %in% colnames(merged@meta.data)) {
                   order = TRUE, pt.size = 0.8) +
         scale_color_gradientn(colors = c("#FFFFCC", "#41B6C4", "#0C2C84"),
                               na.value = "grey90") +
-        ggtitle("Integrated UMAP — SHM frequency, heavy chain")
+        ggtitle("Integrated UMAP -- SHM frequency, heavy chain")
     )
   }
 
@@ -389,7 +389,7 @@ if ("c_call" %in% colnames(merged@meta.data)) {
                   order = TRUE, pt.size = 0.8) +
         scale_color_gradientn(colors = c("#FFFFCC", "#FD8D3C", "#800026"),
                               na.value = "grey90") +
-        ggtitle("Integrated UMAP — Clone size")
+        ggtitle("Integrated UMAP -- Clone size")
     )
   }
 
@@ -411,7 +411,7 @@ if ("c_call" %in% colnames(merged@meta.data)) {
   )
 
 } else {
-  message("  No BCR metadata found — skipping BCR overlay plots.")
+  message("  No BCR metadata found -- skipping BCR overlay plots.")
   message("  Run 04_Add_BCR.R first if you want BCR plots.")
 }
 

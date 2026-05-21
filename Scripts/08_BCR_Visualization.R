@@ -39,7 +39,7 @@
 #   - <SAMPLE_ID>_S8_final_table.xlsx     wide-format one-row-per-cell summary
 #   - Plots/Part8/Trees/<SAMPLE_ID>_<CLONE_ID>_tree.pdf   tree PDFs
 #
-# NOTE — IQ-TREE 2 (required for Part C only):
+# NOTE -- IQ-TREE 2 (required for Part C only):
 #   Download the binary for your OS from:
 #     https://github.com/Cibiv/IQ-TREE/releases
 #   Unzip and note the path to the executable, then set IQTREE_EXEC below.
@@ -62,8 +62,8 @@ RDS_IN <- "C:/Users/YourName/Documents/MyProject/RDS_Objects/integrated_S7_annot
 # BCR TSV files from step 01 -- one entry per sample
 # Format: list(<sample_id> = <path_to_tsv>, ...)
 BCR_TSV <- list(
-  P1_LN = "C:/Users/YourName/Documents/Immcantation/P1_LN/Output/P1_LN_bcr_data.tsv",
-  P1_PT = "C:/Users/YourName/Documents/Immcantation/P1_PT/Output/P1_PT_bcr_data.tsv"
+  MySample1 = "C:/Users/YourName/Documents/MyProject/MySample1/Output/MySample1_bcr_data.tsv",
+  MySample2 = "C:/Users/YourName/Documents/MyProject/MySample2/Output/MySample2_bcr_data.tsv"
 )
 
 # Output directory for annotated BCR files and Excel tables
@@ -85,7 +85,7 @@ TOP_N_TREES <- 5
 # Minimum clone size (paired cells) required to attempt a tree
 MIN_CLONE_SIZE <- 3
 
-# Cell type color palette — update labels and colors to match your cell_type
+# Cell type color palette -- update labels and colors to match your cell_type
 # annotations from step 07. Names must match the cell_type values exactly.
 # Add or remove entries to match the clusters in your dataset.
 cluster_colors <- c(
@@ -98,13 +98,12 @@ cluster_colors <- c(
   "CellType_7" = "#00A6FF",
   "CellType_8" = "#B385FF",
   "CellType_9" = "#EF67EB",
-  "CellType_10" = "#FF63B6",
-  "Unsure"      = "#AAAAAA"
+  "CellType_10" = "#FF63B6"
   # Add or remove entries to match the clusters in your dataset
 )
 
 # =============================================================================
-# END OF EDITABLE SECTION — do not change anything below
+# END OF EDITABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -156,10 +155,10 @@ dir.create(PLOT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 
 # =============================================================================
-# PART A — JOIN CELL TYPE AND COMPUTE DUPLICATE COUNTS
+# PART A -- JOIN CELL TYPE AND COMPUTE DUPLICATE COUNTS
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART A — Join cell type and compute duplicate counts")
+message("PART A -- Join cell type and compute duplicate counts")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -297,17 +296,17 @@ for (sid in names(bcr_annotated)) {
 
   out_path <- file.path(OUT_DIR, paste0(sid, "_S8_final_table.xlsx"))
   writexl::write_xlsx(wide, out_path)
-  message(sid, ": wide-format table saved (", nrow(wide), " cells) — ", out_path)
+  message(sid, ": wide-format table saved (", nrow(wide), " cells) -- ", out_path)
 }
 
 message("\nPart A complete.")
 
 
 # =============================================================================
-# PART B — DONUT PLOTS
+# PART B -- DONUT PLOTS
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART B — Donut plots")
+message("PART B -- Donut plots")
 message(paste(rep("=", 60), collapse = ""))
 
 for (sid in names(bcr_annotated)) {
@@ -342,10 +341,10 @@ message("\nPart B complete.")
 
 
 # =============================================================================
-# PART C — PHYLOGENETIC TREES
+# PART C -- PHYLOGENETIC TREES
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART C — Phylogenetic trees")
+message("PART C -- Phylogenetic trees")
 message(paste(rep("=", 60), collapse = ""))
 
 tree_dir <- file.path(PLOT_DIR, "Trees")

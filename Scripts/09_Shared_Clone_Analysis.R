@@ -48,7 +48,7 @@
 #   - Plots/Part9/clonal_occupy_proportion.pdf
 #   - Plots/Part9/shared_clones_dotplot_<PATIENT_ID>.pdf
 #
-# NOTE — clonalOccupy / occupiedscRepertoire:
+# NOTE -- clonalOccupy / occupiedscRepertoire:
 #   clonalOccupy() was renamed to occupiedscRepertoire() in scRepertoire v2.
 #   This script calls occupiedscRepertoire(). If you are on an older version
 #   replace it with clonalOccupy() and the same arguments will work.
@@ -59,11 +59,11 @@
 # !! ONLY EDIT THIS SECTION !!
 # =============================================================================
 
-# Annotated BCR TSV files from step 08 — one entry per sample
+# Annotated BCR TSV files from step 08 -- one entry per sample
 # Format: list(<sample_id> = <path_to_tsv>, ...)
 BCR_TSV <- list(
-  P1_LN = "C:/Users/YourName/Documents/MyProject/BCR_Data/Annotated/P1_LN_S8_bcr_annotated.tsv",
-  P1_PT = "C:/Users/YourName/Documents/MyProject/BCR_Data/Annotated/P1_PT_S8_bcr_annotated.tsv"
+  MySample1 = "C:/Users/YourName/Documents/MyProject/MySample1/Output/MySample1_bcr_data.tsv",
+  MySample2 = "C:/Users/YourName/Documents/MyProject/MySample2/Output/MySample2_bcr_data.tsv"
 )
 
 # Annotated Seurat object from step 07
@@ -83,7 +83,7 @@ PATIENT_ID <- "P1"
 
 # Cluster of interest for the filtered clonal network plot (Part C)
 # Replace with whichever cell type you want to examine
-CLUSTER_OF_INTEREST <- "PC"
+CLUSTER_OF_INTEREST <- "CellType_1"
 
 # Cell type cluster order for the dot plot x-axis.
 # Replace with the cell type labels from your own annotation, in the order
@@ -99,11 +99,11 @@ CLUSTER_ORDER <- c(
   "CellType_8",
   "CellType_9",
   "CellType_10",
-  "Unsure"
+  "CellType_11",
   # Add or remove entries to match the clusters in your dataset
 )
 
-# Isotype color palette — consistent with the donut palette in step 08
+# Isotype color palette -- consistent with the donut palette in step 08
 ISOTYPE_COLORS <- c(
   IGHD  = "#E41A1C",
   IGHM  = "#377EB8",
@@ -116,7 +116,7 @@ ISOTYPE_COLORS <- c(
 )
 
 # =============================================================================
-# END OF EDITABLE SECTION — do not change anything below
+# END OF EDITABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -129,7 +129,7 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(data.table)
   library(stringr)
-  library(ggraph)     # required by clonalNetwork — load before plotting
+  library(ggraph)     # required by clonalNetwork -- load before plotting
   library(patchwork)
 })
 
@@ -167,7 +167,7 @@ prepare_for_scRepertoire <- function(df) {
   if (!"j_gene"   %in% names(df) && "j_call"     %in% names(df)) df$j_gene   <- df$j_call
   if (!"c_gene"   %in% names(df) && "c_call"     %in% names(df)) df$c_gene   <- df$c_call
 
-  # CDR3 sequences — scRepertoire uses cdr3_nt for the CTstrict distance calc
+  # CDR3 sequences -- scRepertoire uses cdr3_nt for the CTstrict distance calc
   if (!"cdr3"    %in% names(df) && "junction_aa" %in% names(df)) df$cdr3    <- df$junction_aa
   if (!"cdr3_nt" %in% names(df) && "junction"    %in% names(df)) df$cdr3_nt <- df$junction
   if (!"cdr3_aa" %in% names(df) && "junction_aa" %in% names(df)) df$cdr3_aa <- df$junction_aa
@@ -198,10 +198,10 @@ pick_dominant_isotype <- function(x) {
 
 
 # =============================================================================
-# PART A — PREPARE AIRR DATA AND RUN combineBCR()
+# PART A -- PREPARE AIRR DATA AND RUN combineBCR()
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART A — Prepare AIRR data and run combineBCR()")
+message("PART A -- Prepare AIRR data and run combineBCR()")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -229,7 +229,7 @@ message("\n>> A2: Running combineBCR() across ", length(airr_list), " samples...
 
 # Note on barcode format: combineBCR() prepends the sample name to each
 # barcode, producing e.g. "P1_LN_ACTGCTCA...-1_P1_LN". This double
-# suffix/prefix is expected — our cell_ids already carry the sample suffix
+# suffix/prefix is expected -- our cell_ids already carry the sample suffix
 # from step 01, and combineBCR() adds its own prefix on top. The ct_lookup
 # step in A3 strips the leading prefix to recover the original cell_id format.
 
@@ -316,10 +316,10 @@ message("\nPart A complete.")
 
 
 # =============================================================================
-# PART B — REPERTOIRE CHARACTERIZATION AND SHARED CLONE QUANTIFICATION
+# PART B -- REPERTOIRE CHARACTERIZATION AND SHARED CLONE QUANTIFICATION
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART B — Repertoire characterization and shared clone quantification")
+message("PART B -- Repertoire characterization and shared clone quantification")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -354,7 +354,7 @@ message("CTstrict clones shared LN+PT: ", length(shared_cts))
 cells_ln_shared <- sum(bcr_igh$CTstrict[bcr_igh$tissue == "LN"] %in% shared_cts)
 cells_pt_shared <- sum(bcr_igh$CTstrict[bcr_igh$tissue == "PT"] %in% shared_cts)
 
-# Raw counts only — no percentages (denominator choice is non-trivial when
+# Raw counts only -- no percentages (denominator choice is non-trivial when
 # comparing a pure CTstrict approach against a hybrid Immcantation method)
 message("LN cells in shared clones:    ", cells_ln_shared)
 message("PT cells in shared clones:    ", cells_pt_shared)
@@ -404,7 +404,7 @@ p_shared_bar <- ggplot(shared_bar_df,
   labs(
     x     = "Tissue",
     y     = "Number of cells (IGH)",
-    title = paste0("Cells in shared vs. exclusive clones — ", PATIENT_ID)
+    title = paste0("Cells in shared vs. exclusive clones -- ", PATIENT_ID)
   )
 print(p_shared_bar)
 
@@ -416,10 +416,10 @@ message("\nPart B complete.")
 
 
 # =============================================================================
-# PART C — ATTACH CLONAL DATA TO SEURAT OBJECT
+# PART C -- ATTACH CLONAL DATA TO SEURAT OBJECT
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART C — Attach clonal data to Seurat object")
+message("PART C -- Attach clonal data to Seurat object")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -499,7 +499,7 @@ message("Saved: integrated_S9_scRep.rds")
 # ---- C3. Clonal network on UMAP ---------------------------------------------
 message("\n>> C3: Clonal network plots...")
 
-# Full network — all clusters
+# Full network -- all clusters
 p_net_all <- clonalNetwork(
   seu_scRep,
   reduction       = "umap",
@@ -514,7 +514,7 @@ ggsave(file.path(PLOT_DIR, "clonal_network_all.pdf"),
        p_net_all, width = 9, height = 7)
 message("Saved: clonal_network_all.pdf")
 
-# Filtered network — single cluster of interest
+# Filtered network -- single cluster of interest
 p_net_filtered <- clonalNetwork(
   seu_scRep,
   reduction       = "umap",
@@ -536,7 +536,7 @@ message("\n>> C4: Clonal occupancy plots...")
 
 # Note: clonalOccupy() was renamed to occupiedscRepertoire() in scRepertoire
 # v2.0. If you are on an older version, replace occupiedscRepertoire() with
-# clonalOccupy() — the arguments are the same.
+# clonalOccupy() -- the arguments are the same.
 
 p_occupy <- occupiedscRepertoire(
   seu_scRep,
@@ -568,10 +568,10 @@ message("\nPart C complete.")
 
 
 # =============================================================================
-# PART D — SHARED CLONE DOT PLOT
+# PART D -- SHARED CLONE DOT PLOT
 # =============================================================================
 message("\n", paste(rep("=", 60), collapse = ""))
-message("PART D — Shared clone dot plot")
+message("PART D -- Shared clone dot plot")
 message(paste(rep("=", 60), collapse = ""))
 
 
@@ -626,7 +626,7 @@ plot_df <- bcr_plot %>%
   ) %>%
   dplyr::filter(!is.na(Shape), !is.na(ccall_dom))
 
-# Order clones by total cell count — largest at the top of the y axis
+# Order clones by total cell count -- largest at the top of the y axis
 clone_order_tbl <- plot_df %>%
   dplyr::group_by(CTstrict) %>%
   dplyr::summarise(total_cells = sum(Count), .groups = "drop") %>%
@@ -681,7 +681,7 @@ p_shared <- ggplot(plot_df,
   labs(
     x     = "Cell type cluster",
     y     = NULL,
-    title = paste0("Shared LN/PT clones — ", PATIENT_ID)
+    title = paste0("Shared LN/PT clones -- ", PATIENT_ID)
   ) +
   guides(
     color = guide_legend(override.aes = list(size = 4)),

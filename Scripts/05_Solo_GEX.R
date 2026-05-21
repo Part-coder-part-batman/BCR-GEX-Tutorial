@@ -23,14 +23,14 @@
 #   This step is pre-integration. Each sample is processed independently so
 #   you can inspect the data before merging samples in step 06.
 #
-# NOTE — IG/TCR GENE EXCLUSION:
+# NOTE -- IG/TCR GENE EXCLUSION:
 #   V(D)J variable gene transcripts are excluded from HVG selection because
 #   their variability reflects clonal diversity (which V gene a cell expresses)
 #   rather than cell state. They are NOT removed from the object -- they remain
 #   available for feature plots and differential expression. They are only
 #   excluded from the features used for PCA and UMAP.
 #
-# NOTE — CELL CYCLE:
+# NOTE -- CELL CYCLE:
 #   Cell cycle phase is scored and stored as metadata but is NOT regressed out.
 #   In B cell data, proliferating cells are a biologically meaningful population
 #   (typically dark zone GC B cells) and should remain visible in the UMAP.
@@ -87,7 +87,7 @@ var_expl <- 0.8
 cluster_resolution <- 0.5
 
 # =============================================================================
-# END OF MODIFIABLE SECTION — do not change anything below
+# END OF MODIFIABLE SECTION -- do not change anything below
 # =============================================================================
 
 
@@ -214,7 +214,7 @@ for (s in samples) {
 
   print(
     ElbowPlot(obj, ndims = 25) +
-      ggtitle(paste0(s$name, " — Elbow plot")) +
+      ggtitle(paste0(s$name, " -- Elbow plot")) +
       geom_vline(xintercept = n_pc, linetype = "dashed", color = "red") +
       labs(caption = paste0("Red dashed line = PC ", n_pc,
                             " (", round(100 * cum_var[n_pc], 1),
@@ -248,7 +248,7 @@ for (s in samples) {
     DimPlot(obj, reduction = "umap", label = TRUE, repel = TRUE, pt.size = 1.2) +
       scale_color_hue(labels = paste0(names(num_clusters),
                                       " (", num_clusters, ")")) +
-      ggtitle(paste0(s$name, " — Clusters (res = ", cluster_resolution, ")")) +
+      ggtitle(paste0(s$name, " -- Clusters (res = ", cluster_resolution, ")")) +
       theme(legend.text = element_text(size = 9))
   )
 
@@ -258,7 +258,7 @@ for (s in samples) {
                 features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
                 order = TRUE, pt.size = 1.2) +
       patchwork::plot_annotation(
-        title = paste0(s$name, " — QC metrics on UMAP"))
+        title = paste0(s$name, " -- QC metrics on UMAP"))
   )
 
   # --- 7c. DotPlot: B cell marker panel ---
@@ -267,7 +267,7 @@ for (s in samples) {
     DotPlot(obj, features = markers_present, cols = c("gray90", "red"),
             dot.scale = 6) +
       RotatedAxis() +
-      ggtitle(paste0(s$name, " — B cell marker panel")) +
+      ggtitle(paste0(s$name, " -- B cell marker panel")) +
       theme(axis.text.x = element_text(size = 8))
   )
 
@@ -290,7 +290,7 @@ for (s in samples) {
   print(
     DimPlot(obj, reduction = "umap", label = FALSE, pt.size = 1.2,
             cols = c("G1" = "#AAAAAA", "S" = "#E69F00", "G2M" = "#CC79A7")) +
-      ggtitle(paste0(s$name, " — Cell cycle phase"))
+      ggtitle(paste0(s$name, " -- Cell cycle phase"))
   )
   Idents(obj) <- "seurat_clusters"
 
@@ -310,7 +310,7 @@ for (s in samples) {
                                    "G2M" = "#CC79A7")) +
       ylab("% of cells") + xlab("Cluster") +
       theme_classic(base_size = 12) +
-      ggtitle(paste0(s$name, " — Cell cycle composition per cluster"))
+      ggtitle(paste0(s$name, " -- Cell cycle composition per cluster"))
   )
 
   # --- 7g. BCR overlay plots (only if BCR metadata present) ---
@@ -325,7 +325,7 @@ for (s in samples) {
         DimPlot(obj_bcr, group.by = "c_call", label = FALSE, pt.size = 1.2,
                 cols = isotype_colors[present_iso],
                 order = rev(present_iso)) +
-          ggtitle(paste0(s$name, " — Isotype (BCR+ cells)"))
+          ggtitle(paste0(s$name, " -- Isotype (BCR+ cells)"))
       )
     }
 
@@ -336,7 +336,7 @@ for (s in samples) {
                     order = TRUE, pt.size = 1.2) +
           scale_color_gradientn(colors = c("#FFFFCC", "#41B6C4", "#0C2C84"),
                                 na.value = "grey90") +
-          ggtitle(paste0(s$name, " — SHM frequency, heavy chain"))
+          ggtitle(paste0(s$name, " -- SHM frequency, heavy chain"))
       )
     }
 
@@ -347,7 +347,7 @@ for (s in samples) {
                     order = TRUE, pt.size = 1.2) +
           scale_color_gradientn(colors = c("#FFFFCC", "#FD8D3C", "#800026"),
                                 na.value = "grey90") +
-          ggtitle(paste0(s$name, " — Clone size"))
+          ggtitle(paste0(s$name, " -- Clone size"))
       )
     }
 
@@ -366,12 +366,12 @@ for (s in samples) {
                             breaks = present_iso2) +
           ylab("Percentage of BCR+ cells") + xlab("Cluster") +
           theme_classic(base_size = 12) +
-          ggtitle(paste0(s$name, " — Isotype composition per cluster"))
+          ggtitle(paste0(s$name, " -- Isotype composition per cluster"))
       )
     }
 
   } else {
-    message("  No BCR metadata found — skipping BCR overlay plots.")
+    message("  No BCR metadata found -- skipping BCR overlay plots.")
     message("  Run 04_Add_BCR.R first if you want BCR plots.")
   }
 
