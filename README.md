@@ -2,7 +2,11 @@
 
 A three-part R tutorial for single-cell BCR sequence processing and integration with gene expression data, using the Immcantation toolkit and Seurat.
 
-The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo in two records: [Cell Ranger inputs](https://zenodo.org/records/20323951) (raw .h5 and VDJ files) and [pipeline outputs](https://zenodo.org/records/20324083) (processed BCR tables and annotated Seurat object).
+The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient.
+
+Data are deposited on Zenodo in two records:
+- **[Cell Ranger inputs](https://zenodo.org/records/20323951)** -- raw .h5 count matrices and VDJ output files (filtered_contig.fasta, filtered_contig_annotations.csv, airr_rearrangement.tsv)
+- **[Pipeline outputs](https://zenodo.org/records/20324083)** -- processed BCR tables (bcr_data.tsv per sample) and annotated integrated Seurat object (integrated_S7_annotated.rds)
 
 ---
 
