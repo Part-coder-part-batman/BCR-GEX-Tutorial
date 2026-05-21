@@ -2,7 +2,7 @@
 
 A three-part R tutorial for single-cell BCR sequence processing and integration with gene expression data, using the Immcantation toolkit and Seurat.
 
-The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo: ([https://doi.org/10.5281/zenodo.20287324](https://zenodo.org/records/20287324))
+The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph nodes in ovarian cancer lack germinal centers but harbor tumor-reactive memory B cells clonally linked to intra-tumoral B cells." We use a paired lymph node and primary tumor sample from the same patient. Data are deposited on Zenodo in two records: [Cell Ranger inputs](https://zenodo.org/records/20323951) (raw .h5 and VDJ files) and [pipeline outputs](https://zenodo.org/records/20324083) (processed BCR tables and annotated Seurat object).
 
 ---
 
@@ -30,6 +30,7 @@ The dataset comes from Nathan et al., *Immunity* (2026): "Tumor-draining lymph n
 - Shared clone analysis
 
 Standalone `.R` scripts are also provided for each step, for users who prefer working outside of R Markdown:
+
 - `00_Docker_Setup_and_VDJ_Assignment.md`
 - `01_BCR_Pipeline.R`
 - `02_GEX_QC.R`
@@ -51,16 +52,16 @@ Standalone `.R` scripts are also provided for each step, for users who prefer wo
 | Part 2 | `BCR_GEX_Tutorial_Part2.Rmd` | GEX analysis with Seurat: QC, doublet removal, BCR integration, RPCA, cluster annotation |
 | Part 3 | `BCR_GEX_Tutorial_Part3.Rmd` | Repertoire visualization: donut plots, phylogenetic trees, shared clone analysis |
 
-Each part has a Prerequisites section listing exactly which input files are needed. The Zenodo deposit includes intermediate output files so you can start from Part 2 or Part 3 without running earlier parts.
+Each part has a Prerequisites section listing exactly which input files are needed. The Zenodo [pipeline outputs](https://zenodo.org/records/20324083) deposit includes intermediate files so you can start from Part 2 or Part 3 without running earlier parts.
 
 ---
 
 ## Getting started
 
-1. Download data files from [Zenodo](https://zenodo.org/records/20287324)
+1. Download data files from Zenodo: [Cell Ranger inputs](https://zenodo.org/records/20323951) for Part 1, [pipeline outputs](https://zenodo.org/records/20324083) to start from Part 2 or 3
 2. Clone this repository
 3. Open `BCR_GEX_Tutorial_Part1.Rmd` in RStudio and update the paths chunk at the top
-4. Knit each part in order, or start from a later part using the Zenodo entry-point files
+4. Knit each part in order, or start from a later part using the pipeline output files
 
 ---
 
